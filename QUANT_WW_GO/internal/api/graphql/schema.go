@@ -1,0 +1,480 @@
+// schema.go - Main GraphQL schema for the application
+
+package graphql
+
+import (
+	"github.com/graphql-go/graphql"
+	"github.com/quant-webworks/go/internal/api/graphql/schema"
+	"github.com/quant-webworks/go/internal/security/risk"
+)
+
+// Schema defines the GraphQL schema for the application
+type Schema struct {
+	Schema *graphql.Schema
+	Types  *TypeRegistry
+}
+
+// TypeRegistry holds all GraphQL types used in the application
+type TypeRegistry struct {
+	TokenAnalysisTypes *schema.TokenAnalysisTypes
+	
+	// Basic types
+	JSON        *graphql.Scalar
+	DateTime    *graphql.Scalar
+	
+	// System types
+	SystemStatus *graphql.Object
+	ServiceStatus *graphql.Object
+	
+	// Risk types
+	RiskProfile  *graphql.Object
+	RiskCategory *graphql.Object
+	
+	// Job types
+	JobStatus    *graphql.Object
+	JobResult    *graphql.Object
+}
+
+// NewSchema creates a new GraphQL schema for the application
+func NewSchema(tokenAnalyzer *risk.TokenAnalyzer, riskEngine *risk.Engine) (*Schema, error) {
+	// Create a new schema
+	s := &Schema{
+		Types: &TypeRegistry{},
+	}
+	
+	// Initialize types
+	s.initTypes()
+	
+	// Create token analysis types
+	s.Types.TokenAnalysisTypes = schema.NewTokenAnalysisTypes()
+	
+	// Build the schema
+	schema, err := s.buildSchema(tokenAnalyzer, riskEngine)
+	if err != nil {
+		return nil, err
+	}
+	s.Schema = schema
+	
+	return s, nil
+}
+
+// initTypes initializes all GraphQL types
+func (s *Schema) initTypes() {
+	// Initialize basic scalar types
+	s.Types.JSON = graphql.NewScalar(graphql.ScalarConfig{
+		Name:        "JSON",
+		Description: "Arbitrary JSON value",
+		Serialize:   schema.SerializeJSON,
+	})
+	
+	s.Types.DateTime = graphql.NewScalar(graphql.ScalarConfig{
+		Name:        "DateTime",
+		Description: "ISO-8601 formatted date-time string",
+		Serialize: func(value interface{}) interface{} {
+			// In a real implementation, this would properly format various time types
+			return value
+		},
+	})
+	
+	// Initialize System Status types
+	s.Types.ServiceStatus = graphql.NewObject(graphql.ObjectConfig{
+		Name: "ServiceStatus",
+		Description: "Status of a system service",
+		Fields: graphql.Fields{
+			"name": &graphql.Field{
+				Type:        graphql.String,
+				Description: "Service name",
+			},
+			"status": &graphql.Field{
+				Type:        graphql.String,
+				Description: "Service status (healthy, degraded, down)",
+			},
+			"latency": &graphql.Field{
+				Type:        graphql.Int,
+				Description: "Service latency in milliseconds",
+			},
+			"message": &graphql.Field{
+				Type:        graphql.String,
+				Description: "Status message",
+			},
+			"lastChecked": &graphql.Field{
+				Type:        s.Types.DateTime,
+				Description: "When the service was last checked",
+			},
+		},
+	})
+	
+	s.Types.SystemStatus = graphql.NewObject(graphql.ObjectConfig{
+		Name: "SystemStatus",
+		Description: "Overall system status",
+		Fields: graphql.Fields{
+			"healthy": &graphql.Field{
+				Type:        graphql.Boolean,
+				Description: "Whether the system is healthy",
+			},
+			"version": &graphql.Field{
+				Type:        graphql.String,
+				Description: "System version",
+			},
+			"uptime": &graphql.Field{
+				Type:        graphql.Int,
+				Description: "System uptime in seconds",
+			},
+			"services": &graphql.Field{
+				Type:        graphql.NewList(s.Types.ServiceStatus),
+				Description: "Status of system services",
+			},
+			"lastUpdated": &graphql.Field{
+				Type:        s.Types.DateTime,
+				Description: "When the status was last updated",
+			},
+		},
+	})
+	
+	// Initialize risk types
+	s.Types.RiskCategory = graphql.NewObject(graphql.ObjectConfig{
+		Name: "RiskCategory",
+		Description: "Risk category with score",
+		Fields: graphql.Fields{
+			"name": &graphql.Field{
+				Type:        graphql.String,
+				Description: "Category name",
+			},
+			"score": &graphql.Field{
+				Type:        graphql.Float,
+				Description: "Risk score (0.0 to 1.0)",
+			},
+			"description": &graphql.Field{
+				Type:        graphql.String,
+				Description: "Category description",
+			},
+		},
+	})
+	
+	s.Types.RiskProfile = graphql.NewObject(graphql.ObjectConfig{
+		Name: "RiskProfile",
+		Description: "Risk profile for an entity",
+		Fields: graphql.Fields{
+			"id": &graphql.Field{
+				Type:        graphql.String,
+				Description: "Profile ID",
+			},
+			"name": &graphql.Field{
+				Type:        graphql.String,
+				Description: "Profile name",
+			},
+			"score": &graphql.Field{
+				Type:        graphql.Float,
+				Description: "Overall risk score (0.0 to 1.0)",
+			},
+			"lastUpdate": &graphql.Field{
+				Type:        s.Types.DateTime,
+				Description: "When the profile was last updated",
+			},
+			"categories": &graphql.Field{
+				Type:        graphql.NewList(s.Types.RiskCategory),
+				Description: "Risk categories",
+			},
+			"trend": &graphql.Field{
+				Type:        graphql.Float,
+				Description: "Risk score trend (negative is improving)",
+			},
+			"metadata": &graphql.Field{
+				Type:        s.Types.JSON,
+				Description: "Additional profile metadata",
+			},
+		},
+	})
+	
+	// Initialize job types
+	s.Types.JobStatus = graphql.NewObject(graphql.ObjectConfig{
+		Name: "JobStatus",
+		Description: "Status of an asynchronous job",
+		Fields: graphql.Fields{
+			"id": &graphql.Field{
+				Type:        graphql.String,
+				Description: "Job ID",
+			},
+			"status": &graphql.Field{
+				Type:        graphql.String,
+				Description: "Job status (queued, running, completed, failed)",
+			},
+			"progress": &graphql.Field{
+				Type:        graphql.Float,
+				Description: "Job progress (0.0 to 1.0)",
+			},
+			"createdAt": &graphql.Field{
+				Type:        s.Types.DateTime,
+				Description: "When the job was created",
+			},
+			"startedAt": &graphql.Field{
+				Type:        s.Types.DateTime,
+				Description: "When the job started running",
+			},
+			"completedAt": &graphql.Field{
+				Type:        s.Types.DateTime,
+				Description: "When the job completed",
+			},
+			"estimatedCompletionTime": &graphql.Field{
+				Type:        s.Types.DateTime,
+				Description: "Estimated completion time",
+			},
+			"error": &graphql.Field{
+				Type:        graphql.String,
+				Description: "Error message if the job failed",
+			},
+		},
+	})
+	
+	s.Types.JobResult = graphql.NewObject(graphql.ObjectConfig{
+		Name: "JobResult",
+		Description: "Result of an asynchronous job",
+		Fields: graphql.Fields{
+			"id": &graphql.Field{
+				Type:        graphql.String,
+				Description: "Job ID",
+			},
+			"status": &graphql.Field{
+				Type:        graphql.String,
+				Description: "Job status",
+			},
+			"resultType": &graphql.Field{
+				Type:        graphql.String,
+				Description: "Type of result data",
+			},
+			"resultData": &graphql.Field{
+				Type:        s.Types.JSON,
+				Description: "Result data as JSON",
+			},
+		},
+	})
+}
+
+// buildSchema builds the complete GraphQL schema
+func (s *Schema) buildSchema(tokenAnalyzer *risk.TokenAnalyzer, riskEngine *risk.Engine) (*graphql.Schema, error) {
+	// Create the root query
+	rootQuery := graphql.NewObject(graphql.ObjectConfig{
+		Name: "RootQuery",
+		Fields: graphql.Fields{
+			// Token analysis queries
+			"tokenAnalysis": &graphql.Field{
+				Type:        s.Types.TokenAnalysisTypes.TokenAnalysisResult,
+				Description: "Analyze a token for security risks",
+				Args: graphql.FieldConfigArgument{
+					"input": &graphql.ArgumentConfig{
+						Type: graphql.NewNonNull(s.Types.TokenAnalysisTypes.TokenAnalysisInput),
+					},
+					"options": &graphql.ArgumentConfig{
+						Type: s.Types.TokenAnalysisTypes.TokenAnalysisOptionsInput,
+					},
+				},
+				Resolve: resolveTokenAnalysis(tokenAnalyzer),
+			},
+			
+			// System status query
+			"systemStatus": &graphql.Field{
+				Type:        s.Types.SystemStatus,
+				Description: "Get system status information",
+				Resolve:     resolveSystemStatus(),
+			},
+			
+			// Risk profile queries
+			"riskProfile": &graphql.Field{
+				Type:        s.Types.RiskProfile,
+				Description: "Get a risk profile by ID",
+				Args: graphql.FieldConfigArgument{
+					"id": &graphql.ArgumentConfig{
+						Type: graphql.NewNonNull(graphql.String),
+					},
+				},
+				Resolve: resolveRiskProfile(riskEngine),
+			},
+			"riskProfiles": &graphql.Field{
+				Type:        graphql.NewList(s.Types.RiskProfile),
+				Description: "Get all risk profiles",
+				Resolve:     resolveRiskProfiles(riskEngine),
+			},
+			
+			// Job status query
+			"jobStatus": &graphql.Field{
+				Type:        s.Types.JobStatus,
+				Description: "Get status of an asynchronous job",
+				Args: graphql.FieldConfigArgument{
+					"id": &graphql.ArgumentConfig{
+						Type: graphql.NewNonNull(graphql.String),
+					},
+				},
+				Resolve: resolveJobStatus(),
+			},
+			"jobResult": &graphql.Field{
+				Type:        s.Types.JobResult,
+				Description: "Get result of a completed job",
+				Args: graphql.FieldConfigArgument{
+					"id": &graphql.ArgumentConfig{
+						Type: graphql.NewNonNull(graphql.String),
+					},
+				},
+				Resolve: resolveJobResult(),
+			},
+		},
+	})
+	
+	// Create the root mutation
+	rootMutation := graphql.NewObject(graphql.ObjectConfig{
+		Name: "RootMutation",
+		Fields: graphql.Fields{
+			// Schedule a token analysis job
+			"scheduleTokenAnalysis": &graphql.Field{
+				Type: s.Types.JobStatus,
+				Description: "Schedule a token analysis job",
+				Args: graphql.FieldConfigArgument{
+					"input": &graphql.ArgumentConfig{
+						Type: graphql.NewNonNull(s.Types.TokenAnalysisTypes.TokenAnalysisInput),
+					},
+					"options": &graphql.ArgumentConfig{
+						Type: s.Types.TokenAnalysisTypes.TokenAnalysisOptionsInput,
+					},
+				},
+				Resolve: resolveScheduleTokenAnalysis(tokenAnalyzer),
+			},
+			
+			// Cancel a job
+			"cancelJob": &graphql.Field{
+				Type: graphql.NewObject(graphql.ObjectConfig{
+					Name: "CancelJobResponse",
+					Fields: graphql.Fields{
+						"success": &graphql.Field{
+							Type: graphql.Boolean,
+						},
+						"message": &graphql.Field{
+							Type: graphql.String,
+						},
+					},
+				}),
+				Description: "Cancel a job",
+				Args: graphql.FieldConfigArgument{
+					"id": &graphql.ArgumentConfig{
+						Type: graphql.NewNonNull(graphql.String),
+					},
+				},
+				Resolve: resolveCancelJob(),
+			},
+			
+			// Update risk model
+			"updateRiskModel": &graphql.Field{
+				Type: graphql.NewObject(graphql.ObjectConfig{
+					Name: "UpdateRiskModelResponse",
+					Fields: graphql.Fields{
+						"success": &graphql.Field{
+							Type: graphql.Boolean,
+						},
+						"message": &graphql.Field{
+							Type: graphql.String,
+						},
+					},
+				}),
+				Description: "Update a risk model configuration",
+				Args: graphql.FieldConfigArgument{
+					"modelId": &graphql.ArgumentConfig{
+						Type: graphql.NewNonNull(graphql.String),
+					},
+					"configuration": &graphql.ArgumentConfig{
+						Type: graphql.NewNonNull(graphql.String), // JSON string
+					},
+				},
+				Resolve: resolveUpdateRiskModel(riskEngine),
+			},
+		},
+	})
+	
+	// Create the schema with queries and mutations
+	schemaConfig := graphql.SchemaConfig{
+		Query:    rootQuery,
+		Mutation: rootMutation,
+	}
+	
+	schema, err := graphql.NewSchema(schemaConfig)
+	if err != nil {
+		return nil, err
+	}
+	
+	return &schema, nil
+}
+
+// Resolver implementations
+// Note: These would typically be moved to a separate resolver file
+// but are included here for completeness
+
+// resolveTokenAnalysis returns a resolver function for token analysis
+func resolveTokenAnalysis(analyzer *risk.TokenAnalyzer) graphql.FieldResolveFn {
+	// This implementation delegates to the function in resolver.go
+	// In a real implementation, this would be the actual resolver logic
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		// Placeholder that would be implemented in the real system
+		return nil, nil
+	}
+}
+
+// resolveSystemStatus returns a resolver function for system status
+func resolveSystemStatus() graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		// Placeholder that would be implemented in the real system
+		return nil, nil
+	}
+}
+
+// resolveRiskProfile returns a resolver function for risk profiles
+func resolveRiskProfile(engine *risk.Engine) graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		// Placeholder that would be implemented in the real system
+		return nil, nil
+	}
+}
+
+// resolveRiskProfiles returns a resolver function for all risk profiles
+func resolveRiskProfiles(engine *risk.Engine) graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		// Placeholder that would be implemented in the real system
+		return nil, nil
+	}
+}
+
+// resolveJobStatus returns a resolver function for job status
+func resolveJobStatus() graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		// Placeholder that would be implemented in the real system
+		return nil, nil
+	}
+}
+
+// resolveJobResult returns a resolver function for job results
+func resolveJobResult() graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		// Placeholder that would be implemented in the real system
+		return nil, nil
+	}
+}
+
+// resolveScheduleTokenAnalysis returns a resolver function for scheduling token analysis
+func resolveScheduleTokenAnalysis(analyzer *risk.TokenAnalyzer) graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		// Placeholder that would be implemented in the real system
+		return nil, nil
+	}
+}
+
+// resolveCancelJob returns a resolver function for canceling jobs
+func resolveCancelJob() graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		// Placeholder that would be implemented in the real system
+		return nil, nil
+	}
+}
+
+// resolveUpdateRiskModel returns a resolver function for updating risk models
+func resolveUpdateRiskModel(engine *risk.Engine) graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		// Placeholder that would be implemented in the real system
+		return nil, nil
+	}
+}

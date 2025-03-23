@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebWorks Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/moment@2.29.1/moment.min.js"></script>
+    <link href="/dashboard/static/css/styles.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100">
+    <div class="flex h-screen">
+        <!-- Sidebar -->
+        <div class="bg-gray-800 text-white w-64 flex flex-col">
+            <div class="p-4">
+                <h1 class="text-2xl font-bold">WebWorks</h1>
+                <p class="text-gray-400">Admin Dashboard</p>
+            </div>
+            <nav class="flex-1">
+                <a href="#overview" class="nav-item active" data-section="overview">
+                    <i class="fas fa-home"></i> Overview
+                </a>
+                <a href="#services" class="nav-item" data-section="services">
+                    <i class="fas fa-server"></i> Services
+                </a>
+                <a href="#proxy" class="nav-item" data-section="proxy">
+                    <i class="fas fa-random"></i> Proxy Routes
+                </a>
+                <a href="#metrics" class="nav-item" data-section="metrics">
+                    <i class="fas fa-chart-line"></i> Metrics
+                </a>
+                <a href="#logs" class="nav-item" data-section="logs">
+                    <i class="fas fa-list"></i> Logs
+                </a>
+                <a href="#config" class="nav-item" data-section="config">
+                    <i class="fas fa-cog"></i> Configuration
+                </a>
+            </nav>
+            <div class="p-4 border-t border-gray-700">
+                <div class="flex items-center">
+                    <i class="fas fa-user-shield mr-2"></i>
+                    <span>Admin User</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="flex-1 flex flex-col overflow-hidden">
+            <!-- Top Bar -->
+            <header class="bg-white shadow-sm">
+                <div class="flex items-center justify-between p-4">
+                    <div class="text-xl font-semibold" id="section-title">Overview</div>
+                    <div class="flex items-center space-x-4">
+                        <button id="refreshBtn" class="btn-refresh">
+                            <i class="fas fa-sync-alt"></i> Refresh
+                        </button>
+                        <div class="relative" id="notifications">
+                            <button class="btn-notification">
+                                <i class="fas fa-bell"></i>
+                                <span class="notification-badge">0</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Content Area -->
+            <main class="flex-1 overflow-x-hidden overflow-y-auto bg-gray-100">
+                <!-- Overview Section -->
+                <section id="overview" class="section active p-6">
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+                        <div class="stat-card">
+                            <div class="stat-title">Total Services</div>
+                            <div class="stat-value" id="total-services">0</div>
+                            <div class="stat-desc">Active services</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-title">Health Status</div>
+                            <div class="stat-value" id="health-status">100%</div>
+                            <div class="stat-desc">System health</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-title">Active Routes</div>
+                            <div class="stat-value" id="active-routes">0</div>
+                            <div class="stat-desc">Proxy routes</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-title">Response Time</div>
+                            <div class="stat-value" id="avg-response">0ms</div>
+                            <div class="stat-desc">Average</div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div class="card">
+                            <h3 class="card-title">System Health</h3>
+                            <canvas id="healthChart"></canvas>
+                        </div>
+                        <div class="card">
+                            <h3 class="card-title">Service Status</h3>
+                            <canvas id="serviceChart"></canvas>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Services Section -->
+                <section id="services" class="section hidden p-6">
+                    <div class="card">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="card-title">Registered Services</h3>
+                            <button class="btn-primary" id="addServiceBtn">
+                                <i class="fas fa-plus"></i> Add Service
+                            </button>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="table-auto w-full" id="services-table">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Status</th>
+                                        <th>Endpoints</th>
+                                        <th>Last Updated</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Proxy Routes Section -->
+                <section id="proxy" class="section hidden p-6">
+                    <div class="card">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="card-title">Proxy Routes</h3>
+                            <button class="btn-primary" id="addRouteBtn">
+                                <i class="fas fa-plus"></i> Add Route
+                            </button>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="table-auto w-full" id="routes-table">
+                                <thead>
+                                    <tr>
+                                        <th>Path</th>
+                                        <th>Target Services</th>
+                                        <th>Load Balancing</th>
+                                        <th>Status</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Metrics Section -->
+                <section id="metrics" class="section hidden p-6">
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div class="card">
+                            <h3 class="card-title">Response Times</h3>
+                            <canvas id="responseChart"></canvas>
+                        </div>
+                        <div class="card">
+                            <h3 class="card-title">Request Volume</h3>
+                            <canvas id="requestChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="card mt-6">
+                        <h3 class="card-title">Service Metrics</h3>
+                        <div class="overflow-x-auto">
+                            <table class="table-auto w-full" id="metrics-table">
+                                <thead>
+                                    <tr>
+                                        <th>Service</th>
+                                        <th>Requests</th>
+                                        <th>Errors</th>
+                                        <th>Avg Response</th>
+                                        <th>Uptime</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Logs Section -->
+                <section id="logs" class="section hidden p-6">
+                    <div class="card">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="card-title">System Logs</h3>
+                            <div class="flex space-x-2">
+                                <select id="logLevel" class="form-select">
+                                    <option value="all">All Levels</option>
+                                    <option value="error">Error</option>
+                                    <option value="warn">Warning</option>
+                                    <option value="info">Info</option>
+                                    <option value="debug">Debug</option>
+                                </select>
+                                <button class="btn-secondary" id="clearLogsBtn">
+                                    Clear Logs
+                                </button>
+                            </div>
+                        </div>
+                        <div id="log-container" class="h-96 overflow-y-auto font-mono text-sm"></div>
+                    </div>
+                </section>
+
+                <!-- Configuration Section -->
+                <section id="config" class="section hidden p-6">
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div class="card">
+                            <h3 class="card-title">Proxy Configuration</h3>
+                            <form id="proxyConfigForm" class="space-y-4">
+                                <div class="form-group">
+                                    <label>Load Balancing Strategy</label>
+                                    <select name="loadBalancing" class="form-select">
+                                        <option value="roundRobin">Round Robin</option>
+                                        <option value="leastConn">Least Connections</option>
+                                        <option value="ipHash">IP Hash</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Health Check Interval (s)</label>
+                                    <input type="number" name="healthCheckInterval" class="form-input" />
+                                </div>
+                                <button type="submit" class="btn-primary">Save Changes</button>
+                            </form>
+                        </div>
+                        <div class="card">
+                            <h3 class="card-title">Metrics Configuration</h3>
+                            <form id="metricsConfigForm" class="space-y-4">
+                                <div class="form-group">
+                                    <label>Retention Period (days)</label>
+                                    <input type="number" name="retentionPeriod" class="form-input" />
+                                </div>
+                                <div class="form-group">
+                                    <label>Sample Interval (s)</label>
+                                    <input type="number" name="sampleInterval" class="form-input" />
+                                </div>
+                                <button type="submit" class="btn-primary">Save Changes</button>
+                            </form>
+                        </div>
+                    </div>
+                </section>
+            </main>
+        </div>
+    </div>
+
+    <!-- Modal Templates -->
+    <div id="modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title"></h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body"></div>
+        </div>
+    </div>
+
+    <script src="/dashboard/static/js/app.js"></script>
+    <script src="/dashboard/static/js/charts.js"></script>
+    <script src="/dashboard/static/js/websocket.js"></script>
+</body>
+</html>

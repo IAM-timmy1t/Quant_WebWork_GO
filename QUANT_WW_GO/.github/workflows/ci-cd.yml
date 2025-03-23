@@ -1,0 +1,345 @@
+name: Quant WebWorks GO CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+jobs:
+  validate-structure:
+    name: Validate Project Structure
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Verify directory structure
+        run: |
+          echo "Verifying project structure..."
+          for dir in cmd internal pkg client tests; do
+            if [ ! -d "$dir" ]; then
+              echo "Error: Required directory '$dir' not found"
+              exit 1
+            fi
+          done
+          echo "Project structure validation passed"
+
+  go-lint:
+    name: Go Lint and Security Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '^1.21'
+
+      - name: Install golangci-lint
+        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.54.1
+
+      - name: Run golangci-lint
+        run: $(go env GOPATH)/bin/golangci-lint run ./... --timeout=5m
+
+      - name: Run govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          $(go env GOPATH)/bin/govulncheck ./...
+
+      - name: Check for hardcoded secrets
+        run: |
+          # Simple grep for potential API keys and secrets
+          if grep -r -E "(api|secret|key|token|password).*['\"][a-zA-Z0-9_-]{16,}['\"]" --include="*.go" .; then
+            echo "Warning: Potential hardcoded secrets detected"
+            exit 1
+          fi
+
+  go-test:
+    name: Go Backend Tests
+    runs-on: ubuntu-latest
+    needs: [go-lint]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '^1.21'
+
+      - name: Run unit tests with coverage
+        run: |
+          go test -race -coverprofile=coverage.out -covermode=atomic ./...
+          go tool cover -func=coverage.out
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.out
+          flags: backend
+          name: go-coverage
+
+      - name: Run integration tests
+        run: |
+          # Setup any test dependencies
+          go test -tags=integration ./tests/... -v
+
+  react-lint:
+    name: React Lint and Security Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ./client
+        run: npm ci
+
+      - name: Run ESLint
+        working-directory: ./client
+        run: npm run lint
+
+      - name: Run security audit
+        working-directory: ./client
+        run: npm audit --production
+
+  react-test:
+    name: React Frontend Tests
+    runs-on: ubuntu-latest
+    needs: [react-lint]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ./client
+        run: npm ci
+
+      - name: Run Jest tests with coverage
+        working-directory: ./client
+        run: npm run test:coverage -- --ci --watchAll=false
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v3
+        with:
+          directory: ./client/coverage
+          flags: frontend
+          name: react-coverage
+
+      - name: Install Cypress dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk2.0-0 libgtk-3-0 libgbm-dev libnotify-dev libgconf-2-4 libnss3 libxss1 libasound2 libxtst6 xauth xvfb
+
+      - name: Run Cypress E2E tests
+        uses: cypress-io/github-action@v5
+        with:
+          working-directory: ./client
+          start: npm start
+          wait-on: 'http://localhost:3000'
+          browser: chrome
+          record: false
+
+  build:
+    name: Build Application
+    runs-on: ubuntu-latest
+    needs: [go-test, react-test]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: false
+          tags: quant-webworks-go:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          load: true
+          outputs: type=docker,dest=/tmp/quant-webworks-go.tar
+
+      - name: Test Docker image
+        run: |
+          docker load < /tmp/quant-webworks-go.tar
+          docker run --rm -d -p 8080:8080 --name quant-test quant-webworks-go:test
+          sleep 5
+          curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health | grep 200
+          docker stop quant-test
+
+      - name: Upload Docker image
+        uses: actions/upload-artifact@v3
+        with:
+          name: quant-webworks-go-image
+          path: /tmp/quant-webworks-go.tar
+          retention-days: 1
+
+  performance:
+    name: Performance Check
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Download Docker image
+        uses: actions/download-artifact@v3
+        with:
+          name: quant-webworks-go-image
+          path: /tmp
+
+      - name: Load Docker image
+        run: docker load < /tmp/quant-webworks-go.tar
+
+      - name: Run performance tests
+        run: |
+          docker run --rm -d -p 8080:8080 --name quant-perf quant-webworks-go:test
+          sleep 5
+          
+          # Install k6 for load testing
+          curl -L https://github.com/grafana/k6/releases/download/v0.45.0/k6-v0.45.0-linux-amd64.tar.gz | tar xz
+          sudo mv k6-v0.45.0-linux-amd64/k6 /usr/local/bin/
+          
+          # Create a basic k6 script
+          cat > load-test.js << EOF
+          import http from 'k6/http';
+          import { check, sleep } from 'k6';
+          
+          export let options = {
+            vus: 10,
+            duration: '30s',
+            thresholds: {
+              http_req_duration: ['p(95)<500'],
+              http_req_failed: ['rate<0.01'],
+            },
+          };
+          
+          export default function() {
+            let res = http.get('http://localhost:8080/health');
+            check(res, {
+              'status is 200': (r) => r.status === 200,
+              'response time < 200ms': (r) => r.timings.duration < 200,
+            });
+            sleep(1);
+          }
+          EOF
+          
+          # Run the load test
+          k6 run load-test.js
+          
+          docker stop quant-perf
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Download Docker image
+        uses: actions/download-artifact@v3
+        with:
+          name: quant-webworks-go-image
+          path: /tmp
+
+      - name: Load Docker image
+        run: docker load < /tmp/quant-webworks-go.tar
+
+      - name: Run Trivy scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'quant-webworks-go:test'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  deploy-staging:
+    name: Deploy to Staging
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    needs: [performance, security-scan]
+    environment: staging
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/quant-webworks-go:staging
+            ${{ secrets.DOCKERHUB_USERNAME }}/quant-webworks-go:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Add staging deployment steps here - e.g., SSH into server and update containers
+
+  deploy-production:
+    name: Deploy to Production
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: [performance, security-scan]
+    environment: production
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/quant-webworks-go:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/quant-webworks-go:stable
+            ${{ secrets.DOCKERHUB_USERNAME }}/quant-webworks-go:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Add production deployment steps here - e.g., update Kubernetes deployment

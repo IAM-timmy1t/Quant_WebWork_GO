@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  bridge-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: quant-webworks-go:latest
+    container_name: quant-webworks-bridge
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - ENABLE_WEB=true
+      - CORS_ORIGINS=http://localhost:3000,http://frontend:3000
+      - LOG_LEVEL=info
+      - METRICS_ENABLED=true
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    networks:
+      - quant-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  frontend-dev:
+    image: node:18-alpine
+    container_name: quant-webworks-frontend-dev
+    working_dir: /app
+    command: sh -c "npm install && npm start"
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - REACT_APP_SERVER_URL=http://localhost:8080
+      - CHOKIDAR_USEPOLLING=true
+    volumes:
+      - ./client:/app
+    networks:
+      - quant-network
+    depends_on:
+      - bridge-server
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    networks:
+      - quant-network
+    depends_on:
+      - bridge-server
+      - frontend-dev
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_DOMAIN=localhost
+      - GF_SMTP_ENABLED=false
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - grafana-data:/var/lib/grafana
+    restart: unless-stopped
+    networks:
+      - quant-network
+    depends_on:
+      - prometheus
+
+networks:
+  quant-network:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:

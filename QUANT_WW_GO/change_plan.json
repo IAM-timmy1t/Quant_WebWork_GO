@@ -1,0 +1,56 @@
+{
+  "file_fixes": [
+    {
+      "file_path": "go.mod",
+      "change_summary": "Update Go module path and dependencies",
+      "changes": [
+        {
+          "line_number": 1,
+          "action": "replace",
+          "old_code": "module github.com/timot/Quant_WebWork_GO/QUANT_WW_GO",
+          "new_code": "module github.com/timot/Quant_WebWork_GO/QUANT_WW_GO"
+        },
+        {
+          "line_number": 3,
+          "action": "replace",
+          "old_code": "go 1.20",
+          "new_code": "go 1.20"
+        }
+      ]
+    },
+    {
+      "file_path": "internal/bridge/adapters/grpc_adapter.go",
+      "change_summary": "Update imports for errdetails and monitoring",
+      "changes": [
+        {
+          "line_number": 12,
+          "action": "replace",
+          "old_code": "import (",
+          "new_code": "import ("
+        },
+        {
+          "line_number": 13,
+          "action": "add",
+          "new_code": "\t\"context\""
+        },
+        {
+          "line_number": 20,
+          "action": "add",
+          "new_code": "\t\"github.com/prometheus/client_golang/prometheus/promhttp\""
+        },
+        {
+          "line_number": 25,
+          "action": "replace",
+          "old_code": "\truntime \"github.com/grpc-ecosystem/grpc-gateway/runtime\"",
+          "new_code": "\tgwruntime \"github.com/grpc-ecosystem/grpc-gateway/v2/runtime\""
+        },
+        {
+          "line_number": 30,
+          "action": "replace",
+          "old_code": "\t\"google.golang.org/genproto/googleapis/rpc/errdetails\"",
+          "new_code": "\terrdetails \"google.golang.org/genproto/googleapis/rpc/errdetails\""
+        }
+      ]
+    }
+  ]
+}

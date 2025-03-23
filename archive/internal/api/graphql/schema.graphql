@@ -1,0 +1,238 @@
+type Query {
+    # System Metrics
+    systemMetrics: SystemMetrics!
+    serviceMetrics(serviceId: ID!): ServiceMetrics
+    allServices: [Service!]!
+    service(id: ID!): Service
+    
+    # Security
+    securityEvents(limit: Int = 10, severity: SecuritySeverity): [SecurityEvent!]!
+    securityScore: Float!
+    
+    # Users
+    users(role: UserRole): [User!]!
+    user(id: ID!): User
+    
+    # Monitoring
+    resourceUsage: ResourceUsage!
+    networkTraffic: NetworkTraffic!
+}
+
+type Mutation {
+    # Service Management
+    registerService(input: RegisterServiceInput!): Service!
+    updateService(id: ID!, input: UpdateServiceInput!): Service!
+    deleteService(id: ID!): Boolean!
+    
+    # User Management
+    createUser(input: CreateUserInput!): User!
+    updateUser(id: ID!, input: UpdateUserInput!): User!
+    deleteUser(id: ID!): Boolean!
+    
+    # Security
+    acknowledgeSecurityEvent(id: ID!): SecurityEvent!
+    updateSecuritySettings(input: SecuritySettingsInput!): SecuritySettings!
+}
+
+type Subscription {
+    # Real-time Updates
+    systemMetricsUpdated: SystemMetrics!
+    serviceStatusChanged: ServiceStatus!
+    securityEventOccurred: SecurityEvent!
+}
+
+type SystemMetrics {
+    cpu: CPUMetrics!
+    memory: MemoryMetrics!
+    disk: DiskMetrics!
+    uptime: Float!
+    timestamp: String!
+}
+
+type CPUMetrics {
+    usage: Float!
+    temperature: Float
+    processes: Int!
+}
+
+type MemoryMetrics {
+    total: Float!
+    used: Float!
+    free: Float!
+    cached: Float!
+    swapUsed: Float!
+    swapTotal: Float!
+}
+
+type DiskMetrics {
+    total: Float!
+    used: Float!
+    free: Float!
+    readBytes: Float!
+    writeBytes: Float!
+}
+
+type Service {
+    id: ID!
+    name: String!
+    url: String!
+    status: ServiceStatus!
+    health: Float!
+    metrics: ServiceMetrics
+    lastUpdated: String!
+}
+
+type ServiceMetrics {
+    responseTime: Float!
+    requestCount: Int!
+    errorRate: Float!
+    uptimePercentage: Float!
+}
+
+enum ServiceStatus {
+    ONLINE
+    OFFLINE
+    DEGRADED
+    MAINTENANCE
+}
+
+type SecurityEvent {
+    id: ID!
+    timestamp: String!
+    type: String!
+    severity: SecuritySeverity!
+    description: String!
+    source: String!
+    status: SecurityEventStatus!
+}
+
+enum SecuritySeverity {
+    LOW
+    MEDIUM
+    HIGH
+    CRITICAL
+}
+
+enum SecurityEventStatus {
+    NEW
+    ACKNOWLEDGED
+    INVESTIGATING
+    RESOLVED
+    IGNORED
+}
+
+type User {
+    id: ID!
+    username: String!
+    email: String!
+    role: UserRole!
+    lastActive: String
+    permissions: [Permission!]!
+}
+
+enum UserRole {
+    ADMIN
+    OPERATOR
+    VIEWER
+}
+
+type Permission {
+    resource: String!
+    actions: [String!]!
+}
+
+type ResourceUsage {
+    cpu: [CPUDataPoint!]!
+    memory: [MemoryDataPoint!]!
+    disk: [DiskDataPoint!]!
+}
+
+type CPUDataPoint {
+    timestamp: String!
+    usage: Float!
+}
+
+type MemoryDataPoint {
+    timestamp: String!
+    used: Float!
+    total: Float!
+}
+
+type DiskDataPoint {
+    timestamp: String!
+    used: Float!
+    total: Float!
+}
+
+type NetworkTraffic {
+    incoming: [NetworkDataPoint!]!
+    outgoing: [NetworkDataPoint!]!
+}
+
+type NetworkDataPoint {
+    timestamp: String!
+    bytes: Float!
+}
+
+type SecuritySettings {
+    autoBlockThreshold: Int!
+    minPasswordLength: Int!
+    requireMFA: Boolean!
+    sessionTimeout: Int!
+}
+
+input RegisterServiceInput {
+    name: String!
+    url: String!
+    healthCheckEndpoint: String
+    authType: ServiceAuthType
+    credentials: ServiceCredentialsInput
+}
+
+input ServiceCredentialsInput {
+    apiKey: String
+    username: String
+    password: String
+}
+
+enum ServiceAuthType {
+    NONE
+    API_KEY
+    BASIC_AUTH
+    JWT
+}
+
+input UpdateServiceInput {
+    name: String
+    url: String
+    status: ServiceStatus
+    healthCheckEndpoint: String
+    credentials: ServiceCredentialsInput
+}
+
+input CreateUserInput {
+    username: String!
+    email: String!
+    password: String!
+    role: UserRole!
+    permissions: [PermissionInput!]
+}
+
+input UpdateUserInput {
+    email: String
+    password: String
+    role: UserRole
+    permissions: [PermissionInput!]
+}
+
+input PermissionInput {
+    resource: String!
+    actions: [String!]!
+}
+
+input SecuritySettingsInput {
+    autoBlockThreshold: Int
+    minPasswordLength: Int
+    requireMFA: Boolean
+    sessionTimeout: Int
+}

@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package bridge;
+
+option go_package = "github.com/timot/Quant_WebWork_GO/internal/bridge/protocol";
+
+// Bridge service definition
+service BridgeService {
+  // Stream method for bi-directional communication
+  rpc Stream(stream Message) returns (stream Message);
+  
+  // SendMessage sends a single message to the bridge
+  rpc SendMessage(Message) returns (Message);
+  
+  // GetMetrics retrieves bridge metrics
+  rpc GetMetrics(MetricsRequest) returns (MetricsResponse);
+}
+
+// Message represents a bridge communication message
+message Message {
+  string id = 1;
+  string type = 2;
+  string content = 3;
+  string metadata = 4;
+  int64 timestamp = 5;
+}
+
+// MetricsRequest is used to request metrics data
+message MetricsRequest {
+  string client_id = 1;
+  repeated string metric_names = 2;
+}
+
+// MetricsResponse contains metrics data
+message MetricsResponse {
+  map<string, string> metrics = 1;
+  int64 timestamp = 2;
+}

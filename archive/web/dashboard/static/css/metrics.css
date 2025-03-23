@@ -1,0 +1,215 @@
+/* Metrics Dashboard Styles */
+
+.metrics-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    gap: 1.5rem;
+    padding: 1.5rem;
+    max-width: 100%;
+}
+
+.metric-card {
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+}
+
+.metric-card h2 {
+    margin: 0 0 1rem 0;
+    color: #2c3e50;
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+.chart-container {
+    flex: 1;
+    min-height: 300px;
+    position: relative;
+}
+
+/* System Metrics Summary */
+.system-metrics-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.metric-summary-item {
+    background: #f8f9fa;
+    border-radius: 6px;
+    padding: 1rem;
+    text-align: center;
+}
+
+.metric-summary-item h3 {
+    margin: 0;
+    color: #6c757d;
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+.metric-summary-item .value {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: #2c3e50;
+    margin: 0.5rem 0;
+}
+
+/* Service Status Table */
+.service-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 1rem;
+}
+
+.service-table th,
+.service-table td {
+    padding: 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.service-table th {
+    background: #f8f9fa;
+    font-weight: 600;
+    color: #495057;
+}
+
+.status-online {
+    color: #28a745;
+}
+
+.status-offline {
+    color: #dc3545;
+}
+
+.status-warning {
+    color: #ffc107;
+}
+
+/* Log Container */
+.log-container {
+    background: #1e1e1e;
+    border-radius: 6px;
+    padding: 1rem;
+    height: 300px;
+    overflow-y: auto;
+    font-family: monospace;
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+.log-entry {
+    margin: 0.25rem 0;
+    color: #e9ecef;
+}
+
+.log-timestamp {
+    color: #6c757d;
+    margin-right: 0.5rem;
+}
+
+.log-level {
+    font-weight: 600;
+    margin-right: 0.5rem;
+}
+
+.log-level-error {
+    color: #dc3545;
+}
+
+.log-level-warning {
+    color: #ffc107;
+}
+
+.log-level-info {
+    color: #17a2b8;
+}
+
+.log-source {
+    color: #6c757d;
+    margin-right: 0.5rem;
+}
+
+/* Controls */
+.controls-container {
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    padding: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.controls-container h3 {
+    margin: 0 0 1rem 0;
+    color: #2c3e50;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.control-group {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
+}
+
+.control-group label {
+    font-size: 0.875rem;
+    color: #495057;
+}
+
+/* Responsive Adjustments */
+@media (max-width: 768px) {
+    .metrics-container {
+        grid-template-columns: 1fr;
+    }
+
+    .system-metrics-summary {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* Loading States */
+.loading {
+    position: relative;
+}
+
+.loading::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(255, 255, 255, 0.8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    color: #6c757d;
+}
+
+/* Animations */
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.metric-card {
+    animation: fadeIn 0.3s ease-in-out;
+}
+
+/* Chart Tooltips */
+.chartjs-tooltip {
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 0.5rem;
+    border-radius: 4px;
+    font-size: 0.875rem;
+    pointer-events: none;
+}

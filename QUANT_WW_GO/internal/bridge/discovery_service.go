@@ -1,0 +1,803 @@
+// discovery_service.go - Service discovery for bridge components
+
+package bridge
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/timot/Quant_WebWork_GO/internal/bridge/protocols"
+	"github.com/timot/Quant_WebWork_GO/internal/core/metrics"
+)
+
+// Common errors
+var (
+	ErrServiceNotFound      = errors.New("service not found")
+	ErrServiceAlreadyExists = errors.New("service already exists")
+	ErrInvalidServiceInfo   = errors.New("invalid service information")
+	ErrServiceUnavailable   = errors.New("service is unavailable")
+	ErrNotInitialized       = errors.New("discovery service not initialized")
+)
+
+// ServiceStatus represents the status of a service
+type ServiceStatus string
+
+// Service statuses
+const (
+	ServiceStatusUnknown  ServiceStatus = "unknown"
+	ServiceStatusStarting ServiceStatus = "starting"
+	ServiceStatusRunning  ServiceStatus = "running"
+	ServiceStatusStopping ServiceStatus = "stopping"
+	ServiceStatusStopped  ServiceStatus = "stopped"
+	ServiceStatusFailed   ServiceStatus = "failed"
+	ServiceStatusDraining ServiceStatus = "draining"
+	ServiceStatusMaintenance ServiceStatus = "maintenance"
+)
+
+// ServiceChangeEvent represents a service change event
+type ServiceChangeEvent struct {
+	Type        ServiceChangeType     `json:"type"`
+	ServiceInfo protocols.ServiceInfo `json:"service_info"`
+	Timestamp   int64                 `json:"timestamp"`
+}
+
+// ServiceChangeType represents the type of service change
+type ServiceChangeType string
+
+// Service change types
+const (
+	ServiceChangeTypeAdded   ServiceChangeType = "added"
+	ServiceChangeTypeUpdated ServiceChangeType = "updated"
+	ServiceChangeTypeRemoved ServiceChangeType = "removed"
+)
+
+// ServiceFilter represents a filter for service discovery
+type ServiceFilter struct {
+	ServiceType protocols.ServiceType `json:"service_type,omitempty"`
+	Version     protocols.APIVersion  `json:"version,omitempty"`
+	Name        string                `json:"name,omitempty"`
+	Address     string                `json:"address,omitempty"`
+	Metadata    map[string]string     `json:"metadata,omitempty"`
+}
+
+// Matches checks if a service matches the filter
+func (f *ServiceFilter) Matches(service protocols.ServiceInfo) bool {
+	// If service type is specified and doesn't match, return false
+	if f.ServiceType != "" && f.ServiceType != service.Type {
+		return false
+	}
+
+	// If version is specified and doesn't match, return false
+	if f.Version != "" && f.Version != service.Version {
+		return false
+	}
+
+	// If name is specified and doesn't match, return false
+	if f.Name != "" && f.Name != service.Name {
+		return false
+	}
+
+	// If address is specified and doesn't match, return false
+	if f.Address != "" && f.Address != service.Address {
+		return false
+	}
+
+	// If metadata is specified, check that all key-value pairs match
+	if len(f.Metadata) > 0 {
+		for k, v := range f.Metadata {
+			if serviceValue, ok := service.Metadata[k]; !ok || serviceValue != v {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+// Logger interface for discovery service logging
+type Logger interface {
+	Debug(msg string, fields map[string]interface{})
+	Info(msg string, fields map[string]interface{})
+	Warn(msg string, fields map[string]interface{})
+	Error(msg string, fields map[string]interface{})
+}
+
+// HealthChecker provides health checking for services
+type HealthChecker interface {
+	CheckHealth(ctx context.Context, serviceInfo protocols.ServiceInfo) (bool, error)
+	GetStatus(ctx context.Context, serviceInfo protocols.ServiceInfo) (string, error)
+}
+
+// DefaultHealthChecker implements basic health checking
+type DefaultHealthChecker struct {
+	healthCheckTimeout time.Duration
+}
+
+// NewDefaultHealthChecker creates a new default health checker
+func NewDefaultHealthChecker(timeout time.Duration) *DefaultHealthChecker {
+	return &DefaultHealthChecker{
+		healthCheckTimeout: timeout,
+	}
+}
+
+// CheckHealth checks if a service is healthy
+func (c *DefaultHealthChecker) CheckHealth(ctx context.Context, serviceInfo protocols.ServiceInfo) (bool, error) {
+	// Create a context with timeout
+	timeoutCtx, cancel := context.WithTimeout(ctx, c.healthCheckTimeout)
+	defer cancel()
+
+	// In a real implementation, this would make a health check request to the service
+	// For now, we'll simulate this by assuming all services are healthy
+	
+	select {
+	case <-timeoutCtx.Done():
+		return false, timeoutCtx.Err()
+	case <-time.After(100 * time.Millisecond): // Simulate network delay
+		// We'll consider a service healthy if it's in the "running" status
+		return serviceInfo.Status == string(ServiceStatusRunning), nil
+	}
+}
+
+// GetStatus gets the detailed status of a service
+func (c *DefaultHealthChecker) GetStatus(ctx context.Context, serviceInfo protocols.ServiceInfo) (string, error) {
+	// Create a context with timeout
+	timeoutCtx, cancel := context.WithTimeout(ctx, c.healthCheckTimeout)
+	defer cancel()
+
+	// In a real implementation, this would make a status request to the service
+	// For now, we'll return the stored status
+	
+	select {
+	case <-timeoutCtx.Done():
+		return "", timeoutCtx.Err()
+	case <-time.After(100 * time.Millisecond): // Simulate network delay
+		return serviceInfo.Status, nil
+	}
+}
+
+// DiscoveryConfig provides configuration for the discovery service
+type DiscoveryConfig struct {
+	RefreshInterval      time.Duration         // How often to refresh service status
+	HealthCheckInterval  time.Duration         // How often to check service health
+	HealthCheckTimeout   time.Duration         // Timeout for health checks
+	ServiceTTL           time.Duration         // Time-to-live for service registrations
+	EnableWatching       bool                  // Whether to enable service watching
+	EnableHealthChecks   bool                  // Whether to enable health checks
+	StorageType          string                // Storage type (memory, redis, etc.)
+	StorageConfig        map[string]string     // Configuration for storage
+	DefaultServiceStatus ServiceStatus         // Default status for newly registered services
+}
+
+// DefaultDiscoveryConfig returns the default discovery configuration
+func DefaultDiscoveryConfig() *DiscoveryConfig {
+	return &DiscoveryConfig{
+		RefreshInterval:      time.Minute,
+		HealthCheckInterval:  time.Second * 30,
+		HealthCheckTimeout:   time.Second * 5,
+		ServiceTTL:           time.Hour * 24,
+		EnableWatching:       true,
+		EnableHealthChecks:   true,
+		StorageType:          "memory",
+		StorageConfig:        make(map[string]string),
+		DefaultServiceStatus: ServiceStatusRunning,
+	}
+}
+
+// DiscoveryService provides service discovery for bridge components
+type DiscoveryService struct {
+	config         *DiscoveryConfig
+	services       map[string]protocols.ServiceInfo
+	healthChecker  HealthChecker
+	eventListeners map[string]chan<- ServiceChangeEvent
+	servicesMutex  sync.RWMutex
+	listenersMutex sync.RWMutex
+	logger         Logger
+	metrics        *metrics.BridgeMetrics
+	initialized    bool
+	stopChan       chan struct{}
+	wg             sync.WaitGroup
+}
+
+// NewDiscoveryService creates a new discovery service
+func NewDiscoveryService(
+	config *DiscoveryConfig,
+	logger Logger,
+	metrics *metrics.BridgeMetrics,
+) *DiscoveryService {
+	if config == nil {
+		config = DefaultDiscoveryConfig()
+	}
+
+	healthChecker := NewDefaultHealthChecker(config.HealthCheckTimeout)
+
+	return &DiscoveryService{
+		config:         config,
+		services:       make(map[string]protocols.ServiceInfo),
+		healthChecker:  healthChecker,
+		eventListeners: make(map[string]chan<- ServiceChangeEvent),
+		logger:         logger,
+		metrics:        metrics,
+		initialized:    false,
+		stopChan:       make(chan struct{}),
+	}
+}
+
+// SetHealthChecker sets a custom health checker
+func (d *DiscoveryService) SetHealthChecker(healthChecker HealthChecker) {
+	d.healthChecker = healthChecker
+}
+
+// Initialize initializes the discovery service
+func (d *DiscoveryService) Initialize(ctx context.Context) error {
+	d.logger.Info("Initializing discovery service", map[string]interface{}{
+		"refresh_interval":       d.config.RefreshInterval.String(),
+		"health_check_interval":  d.config.HealthCheckInterval.String(),
+		"service_ttl":            d.config.ServiceTTL.String(),
+		"enable_watching":        d.config.EnableWatching,
+		"enable_health_checks":   d.config.EnableHealthChecks,
+		"storage_type":           d.config.StorageType,
+	})
+
+	// In a real implementation, you would initialize storage here
+	// For now, we'll use an in-memory map
+
+	// Start background tasks if needed
+	if d.config.EnableHealthChecks {
+		d.wg.Add(1)
+		go d.healthCheckLoop()
+	}
+
+	d.initialized = true
+	return nil
+}
+
+// RegisterService registers a service with the discovery service
+func (d *DiscoveryService) RegisterService(ctx context.Context, info protocols.ServiceInfo) error {
+	if !d.initialized {
+		return ErrNotInitialized
+	}
+
+	if info.ID == "" || info.Name == "" || info.Address == "" || info.Port == 0 {
+		return ErrInvalidServiceInfo
+	}
+
+	d.servicesMutex.Lock()
+	defer d.servicesMutex.Unlock()
+
+	// Check if the service already exists
+	if existing, ok := d.services[info.ID]; ok {
+		d.logger.Info("Updating existing service registration", map[string]interface{}{
+			"service_id":   info.ID,
+			"service_name": info.Name,
+			"address":      info.Address,
+			"port":         info.Port,
+		})
+
+		// Update the service info
+		d.services[info.ID] = info
+
+		// Notify listeners
+		d.notifyListeners(ServiceChangeEvent{
+			Type:        ServiceChangeTypeUpdated,
+			ServiceInfo: info,
+			Timestamp:   time.Now().UnixNano() / int64(time.Millisecond),
+		})
+
+		// Track metrics
+		if d.metrics != nil {
+			d.metrics.ConnectionsTotal.Inc()
+		}
+
+		return nil
+	}
+
+	// Set default status if not specified
+	if info.Status == "" {
+		info.Status = string(d.config.DefaultServiceStatus)
+	}
+
+	// Set last updated timestamp
+	info.LastUpdated = time.Now().UnixNano() / int64(time.Millisecond)
+
+	// Add the service
+	d.services[info.ID] = info
+
+	d.logger.Info("Registered new service", map[string]interface{}{
+		"service_id":   info.ID,
+		"service_name": info.Name,
+		"service_type": string(info.Type),
+		"address":      info.Address,
+		"port":         info.Port,
+	})
+
+	// Notify listeners
+	d.notifyListeners(ServiceChangeEvent{
+		Type:        ServiceChangeTypeAdded,
+		ServiceInfo: info,
+		Timestamp:   time.Now().UnixNano() / int64(time.Millisecond),
+	})
+
+	// Track metrics
+	if d.metrics != nil {
+		d.metrics.ConnectionsTotal.Inc()
+	}
+
+	return nil
+}
+
+// DeregisterService deregisters a service from the discovery service
+func (d *DiscoveryService) DeregisterService(ctx context.Context, serviceID string) error {
+	if !d.initialized {
+		return ErrNotInitialized
+	}
+
+	d.servicesMutex.Lock()
+	defer d.servicesMutex.Unlock()
+
+	// Check if the service exists
+	info, ok := d.services[serviceID]
+	if !ok {
+		return ErrServiceNotFound
+	}
+
+	// Remove the service
+	delete(d.services, serviceID)
+
+	d.logger.Info("Deregistered service", map[string]interface{}{
+		"service_id":   serviceID,
+		"service_name": info.Name,
+		"service_type": string(info.Type),
+	})
+
+	// Notify listeners
+	d.notifyListeners(ServiceChangeEvent{
+		Type:        ServiceChangeTypeRemoved,
+		ServiceInfo: info,
+		Timestamp:   time.Now().UnixNano() / int64(time.Millisecond),
+	})
+
+	// Track metrics
+	if d.metrics != nil {
+		d.metrics.ConnectionFailures.Inc()
+	}
+
+	return nil
+}
+
+// GetService gets information about a service
+func (d *DiscoveryService) GetService(ctx context.Context, serviceID string) (protocols.ServiceInfo, error) {
+	if !d.initialized {
+		return protocols.ServiceInfo{}, ErrNotInitialized
+	}
+
+	d.servicesMutex.RLock()
+	defer d.servicesMutex.RUnlock()
+
+	// Check if the service exists
+	info, ok := d.services[serviceID]
+	if !ok {
+		return protocols.ServiceInfo{}, ErrServiceNotFound
+	}
+
+	return info, nil
+}
+
+// FindServices finds services matching a filter
+func (d *DiscoveryService) FindServices(ctx context.Context, filter ServiceFilter) ([]protocols.ServiceInfo, error) {
+	if !d.initialized {
+		return nil, ErrNotInitialized
+	}
+
+	d.servicesMutex.RLock()
+	defer d.servicesMutex.RUnlock()
+
+	// Filter services
+	var results []protocols.ServiceInfo
+	for _, info := range d.services {
+		if filter.Matches(info) {
+			results = append(results, info)
+		}
+	}
+
+	return results, nil
+}
+
+// WatchServices watches for service changes
+func (d *DiscoveryService) WatchServices(
+	ctx context.Context,
+	filter ServiceFilter,
+	eventChan chan<- ServiceChangeEvent,
+) (string, error) {
+	if !d.initialized {
+		return "", ErrNotInitialized
+	}
+
+	if !d.config.EnableWatching {
+		return "", errors.New("service watching is disabled")
+	}
+
+	if eventChan == nil {
+		return "", errors.New("event channel cannot be nil")
+	}
+
+	// Generate a listener ID
+	listenerID := fmt.Sprintf("listener-%d", time.Now().UnixNano())
+
+	// Store the listener
+	d.listenersMutex.Lock()
+	d.eventListeners[listenerID] = eventChan
+	d.listenersMutex.Unlock()
+
+	// Send initial events for existing services
+	d.servicesMutex.RLock()
+	for _, info := range d.services {
+		if filter.Matches(info) {
+			select {
+			case eventChan <- ServiceChangeEvent{
+				Type:        ServiceChangeTypeAdded,
+				ServiceInfo: info,
+				Timestamp:   time.Now().UnixNano() / int64(time.Millisecond),
+			}:
+			default:
+				d.logger.Warn("Failed to send initial event to listener", map[string]interface{}{
+					"listener_id": listenerID,
+					"service_id":  info.ID,
+				})
+			}
+		}
+	}
+	d.servicesMutex.RUnlock()
+
+	// Handle context cancelation
+	go func() {
+		<-ctx.Done()
+		d.listenersMutex.Lock()
+		delete(d.eventListeners, listenerID)
+		d.listenersMutex.Unlock()
+
+		d.logger.Debug("Removed service listener due to context cancelation", map[string]interface{}{
+			"listener_id": listenerID,
+		})
+	}()
+
+	return listenerID, nil
+}
+
+// UnwatchServices stops watching for service changes
+func (d *DiscoveryService) UnwatchServices(ctx context.Context, listenerID string) error {
+	if !d.initialized {
+		return ErrNotInitialized
+	}
+
+	d.listenersMutex.Lock()
+	defer d.listenersMutex.Unlock()
+
+	if _, ok := d.eventListeners[listenerID]; !ok {
+		return errors.New("listener not found")
+	}
+
+	delete(d.eventListeners, listenerID)
+
+	d.logger.Debug("Removed service listener", map[string]interface{}{
+		"listener_id": listenerID,
+	})
+
+	return nil
+}
+
+// CheckServiceHealth checks the health of a service
+func (d *DiscoveryService) CheckServiceHealth(ctx context.Context, serviceID string) (bool, error) {
+	if !d.initialized {
+		return false, ErrNotInitialized
+	}
+
+	if !d.config.EnableHealthChecks {
+		return false, errors.New("health checks are disabled")
+	}
+
+	d.servicesMutex.RLock()
+	info, ok := d.services[serviceID]
+	d.servicesMutex.RUnlock()
+
+	if !ok {
+		return false, ErrServiceNotFound
+	}
+
+	healthy, err := d.healthChecker.CheckHealth(ctx, info)
+	if err != nil {
+		d.logger.Warn("Health check failed", map[string]interface{}{
+			"service_id":   serviceID,
+			"service_name": info.Name,
+			"error":        err.Error(),
+		})
+		return false, err
+	}
+
+	// Update status if needed
+	if healthy && info.Status != string(ServiceStatusRunning) {
+		d.updateServiceStatus(serviceID, string(ServiceStatusRunning))
+	} else if !healthy && info.Status == string(ServiceStatusRunning) {
+		d.updateServiceStatus(serviceID, string(ServiceStatusFailed))
+	}
+
+	return healthy, nil
+}
+
+// updateServiceStatus updates the status of a service
+func (d *DiscoveryService) updateServiceStatus(serviceID string, status string) {
+	d.servicesMutex.Lock()
+	defer d.servicesMutex.Unlock()
+
+	if info, ok := d.services[serviceID]; ok {
+		oldStatus := info.Status
+		info.Status = status
+		info.LastUpdated = time.Now().UnixNano() / int64(time.Millisecond)
+		d.services[serviceID] = info
+
+		if oldStatus != status {
+			d.logger.Info("Service status updated", map[string]interface{}{
+				"service_id":   serviceID,
+				"service_name": info.Name,
+				"old_status":   oldStatus,
+				"new_status":   status,
+			})
+
+			// Notify listeners
+			d.notifyListeners(ServiceChangeEvent{
+				Type:        ServiceChangeTypeUpdated,
+				ServiceInfo: info,
+				Timestamp:   info.LastUpdated,
+			})
+
+			// Track metrics
+			if d.metrics != nil {
+				d.metrics.ConnectionsTotal.Inc()
+			}
+		}
+	}
+}
+
+// notifyListeners notifies all event listeners about a service change
+func (d *DiscoveryService) notifyListeners(event ServiceChangeEvent) {
+	d.listenersMutex.RLock()
+	defer d.listenersMutex.RUnlock()
+
+	for id, listener := range d.eventListeners {
+		select {
+		case listener <- event:
+			// Event sent successfully
+		default:
+			d.logger.Warn("Failed to send event to listener", map[string]interface{}{
+				"listener_id": id,
+				"event_type":  string(event.Type),
+				"service_id":  event.ServiceInfo.ID,
+			})
+		}
+	}
+}
+
+// healthCheckLoop runs periodic health checks on registered services
+func (d *DiscoveryService) healthCheckLoop() {
+	defer d.wg.Done()
+
+	ticker := time.NewTicker(d.config.HealthCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-d.stopChan:
+			return
+		case <-ticker.C:
+			d.runHealthChecks()
+		}
+	}
+}
+
+// runHealthChecks runs health checks on all registered services
+func (d *DiscoveryService) runHealthChecks() {
+	d.servicesMutex.RLock()
+	serviceIDs := make([]string, 0, len(d.services))
+	for id := range d.services {
+		serviceIDs = append(serviceIDs, id)
+	}
+	d.servicesMutex.RUnlock()
+
+	for _, id := range serviceIDs {
+		// Create a context with timeout
+		ctx, cancel := context.WithTimeout(context.Background(), d.config.HealthCheckTimeout)
+		
+		// Check service health
+		healthy, err := d.CheckServiceHealth(ctx, id)
+		
+		// Log the result
+		if err != nil {
+			d.logger.Warn("Health check error", map[string]interface{}{
+				"service_id": id,
+				"error":      err.Error(),
+			})
+		} else {
+			d.logger.Debug("Health check completed", map[string]interface{}{
+				"service_id": id,
+				"healthy":    healthy,
+			})
+		}
+		
+		cancel() // Release resources
+	}
+}
+
+// Stop stops the discovery service
+func (d *DiscoveryService) Stop() {
+	if !d.initialized {
+		return
+	}
+
+	d.logger.Info("Stopping discovery service", nil)
+
+	// Signal background goroutines to stop
+	close(d.stopChan)
+
+	// Wait for goroutines to finish
+	d.wg.Wait()
+
+	// Close all listener channels
+	d.listenersMutex.Lock()
+	d.eventListeners = make(map[string]chan<- ServiceChangeEvent)
+	d.listenersMutex.Unlock()
+
+	d.initialized = false
+}
+
+// GetServiceHealth gets detailed health information for a service
+func (d *DiscoveryService) GetServiceHealth(ctx context.Context, serviceID string) (map[string]interface{}, error) {
+	if !d.initialized {
+		return nil, ErrNotInitialized
+	}
+
+	d.servicesMutex.RLock()
+	info, ok := d.services[serviceID]
+	d.servicesMutex.RUnlock()
+
+	if !ok {
+		return nil, ErrServiceNotFound
+	}
+
+	// Check health
+	healthy, err := d.healthChecker.CheckHealth(ctx, info)
+	if err != nil {
+		return map[string]interface{}{
+			"service_id":   info.ID,
+			"service_name": info.Name,
+			"status":       info.Status,
+			"healthy":      false,
+			"error":        err.Error(),
+			"timestamp":    time.Now().UnixNano() / int64(time.Millisecond),
+		}, nil
+	}
+
+	// Get detailed status
+	detailedStatus, err := d.healthChecker.GetStatus(ctx, info)
+	if err != nil {
+		detailedStatus = info.Status
+	}
+
+	return map[string]interface{}{
+		"service_id":      info.ID,
+		"service_name":    info.Name,
+		"service_type":    string(info.Type),
+		"version":         string(info.Version),
+		"address":         fmt.Sprintf("%s:%d", info.Address, info.Port),
+		"status":          info.Status,
+		"detailed_status": detailedStatus,
+		"healthy":         healthy,
+		"last_updated":    info.LastUpdated,
+		"timestamp":       time.Now().UnixNano() / int64(time.Millisecond),
+	}, nil
+}
+
+// GetAllServicesHealth gets health information for all services
+func (d *DiscoveryService) GetAllServicesHealth(ctx context.Context) (map[string]map[string]interface{}, error) {
+	if !d.initialized {
+		return nil, ErrNotInitialized
+	}
+
+	d.servicesMutex.RLock()
+	serviceIDs := make([]string, 0, len(d.services))
+	for id := range d.services {
+		serviceIDs = append(serviceIDs, id)
+	}
+	d.servicesMutex.RUnlock()
+
+	result := make(map[string]map[string]interface{})
+	for _, id := range serviceIDs {
+		health, err := d.GetServiceHealth(ctx, id)
+		if err == nil {
+			result[id] = health
+		} else {
+			d.logger.Warn("Failed to get service health", map[string]interface{}{
+				"service_id": id,
+				"error":      err.Error(),
+			})
+		}
+	}
+
+	return result, nil
+}
+
+// GetServicesByType gets all services of a specific type
+func (d *DiscoveryService) GetServicesByType(ctx context.Context, serviceType protocols.ServiceType) ([]protocols.ServiceInfo, error) {
+	filter := ServiceFilter{
+		ServiceType: serviceType,
+	}
+	return d.FindServices(ctx, filter)
+}
+
+// GetServicesByName gets all services with a specific name
+func (d *DiscoveryService) GetServicesByName(ctx context.Context, name string) ([]protocols.ServiceInfo, error) {
+	filter := ServiceFilter{
+		Name: name,
+	}
+	return d.FindServices(ctx, filter)
+}
+
+// GetServiceMetadata gets metadata for a service
+func (d *DiscoveryService) GetServiceMetadata(ctx context.Context, serviceID string) (map[string]string, error) {
+	info, err := d.GetService(ctx, serviceID)
+	if err != nil {
+		return nil, err
+	}
+
+	return info.Metadata, nil
+}
+
+// UpdateServiceMetadata updates metadata for a service
+func (d *DiscoveryService) UpdateServiceMetadata(ctx context.Context, serviceID string, metadata map[string]string) error {
+	d.servicesMutex.Lock()
+	defer d.servicesMutex.Unlock()
+
+	info, ok := d.services[serviceID]
+	if !ok {
+		return ErrServiceNotFound
+	}
+
+	// Update metadata
+	if info.Metadata == nil {
+		info.Metadata = metadata
+	} else {
+		for k, v := range metadata {
+			info.Metadata[k] = v
+		}
+	}
+
+	// Update last updated timestamp
+	info.LastUpdated = time.Now().UnixNano() / int64(time.Millisecond)
+
+	// Update the service
+	d.services[serviceID] = info
+
+	// Notify listeners
+	d.notifyListeners(ServiceChangeEvent{
+		Type:        ServiceChangeTypeUpdated,
+		ServiceInfo: info,
+		Timestamp:   info.LastUpdated,
+	})
+
+	return nil
+}
+
+// GetServicesCount gets the count of registered services
+func (d *DiscoveryService) GetServicesCount() int {
+	d.servicesMutex.RLock()
+	defer d.servicesMutex.RUnlock()
+	return len(d.services)
+}
+
+// GetListenersCount gets the count of service change listeners
+func (d *DiscoveryService) GetListenersCount() int {
+	d.listenersMutex.RLock()
+	defer d.listenersMutex.RUnlock()
+	return len(d.eventListeners)
+}

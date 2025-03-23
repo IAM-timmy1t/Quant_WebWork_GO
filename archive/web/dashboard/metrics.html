@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebWorks Dashboard - Metrics</title>
+    <link rel="stylesheet" href="/static/css/tailwind.min.css">
+    <link rel="stylesheet" href="/static/css/metrics.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/moment"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment"></script>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto px-4">
+        <!-- Controls -->
+        <div class="controls-container">
+            <h3>Dashboard Controls</h3>
+            <div class="control-group">
+                <label for="refreshRate">Refresh Rate:</label>
+                <select id="refreshRate" class="form-select">
+                    <option value="1000">1 second</option>
+                    <option value="5000" selected>5 seconds</option>
+                    <option value="10000">10 seconds</option>
+                    <option value="30000">30 seconds</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label>Metric Filters:</label>
+                <div id="metricFilters">
+                    <label>
+                        <input type="checkbox" value="system_metrics" checked> System Metrics
+                    </label>
+                    <label>
+                        <input type="checkbox" value="service_metrics" checked> Service Metrics
+                    </label>
+                    <label>
+                        <input type="checkbox" value="route_metrics" checked> Route Metrics
+                    </label>
+                    <label>
+                        <input type="checkbox" value="logs" checked> Logs
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- System Metrics Summary -->
+        <div class="system-metrics-summary">
+            <div class="metric-summary-item">
+                <h3>CPU Usage</h3>
+                <div id="cpuUsage" class="value">0%</div>
+            </div>
+            <div class="metric-summary-item">
+                <h3>Memory Usage</h3>
+                <div id="memoryUsage" class="value">0%</div>
+            </div>
+            <div class="metric-summary-item">
+                <h3>Total Requests</h3>
+                <div id="totalRequests" class="value">0</div>
+            </div>
+            <div class="metric-summary-item">
+                <h3>Error Rate</h3>
+                <div id="errorRate" class="value">0%</div>
+            </div>
+        </div>
+
+        <!-- Metrics Grid -->
+        <div class="metrics-container">
+            <!-- System Metrics Chart -->
+            <div class="metric-card">
+                <h2>System Resource Usage</h2>
+                <div class="chart-container">
+                    <canvas id="systemMetrics"></canvas>
+                </div>
+            </div>
+
+            <!-- Service Health Chart -->
+            <div class="metric-card">
+                <h2>Service Health</h2>
+                <div class="chart-container">
+                    <canvas id="serviceHealth"></canvas>
+                </div>
+            </div>
+
+            <!-- Request Rate Chart -->
+            <div class="metric-card">
+                <h2>Request Rate</h2>
+                <div class="chart-container">
+                    <canvas id="requestRate"></canvas>
+                </div>
+            </div>
+
+            <!-- Service Status Table -->
+            <div class="metric-card">
+                <h2>Service Status</h2>
+                <div class="table-container">
+                    <table class="service-table">
+                        <thead>
+                            <tr>
+                                <th>Service</th>
+                                <th>Status</th>
+                                <th>Requests</th>
+                                <th>Errors</th>
+                                <th>Uptime</th>
+                                <th>Last Error</th>
+                            </tr>
+                        </thead>
+                        <tbody id="serviceTableBody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- System Logs -->
+            <div class="metric-card">
+                <h2>System Logs</h2>
+                <div id="logContainer" class="log-container">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/metrics.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            window.metricsManager = new MetricsManager();
+        });
+    </script>
+</body>
+</html>
