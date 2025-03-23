@@ -7,7 +7,7 @@ import (
     "sync"
     "time"
 
-    "github.com/timot/Quant_WebWork_GO/QUANT_WW_GO/internal/security"
+    "github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/security"
 )
 
 // Analyzer implements advanced risk assessment capabilities
@@ -231,3 +231,7 @@ func (a *Analyzer) GetRiskTrend(sources []string, duration time.Duration) map[st
     
     return result
 }
+
+
+
+

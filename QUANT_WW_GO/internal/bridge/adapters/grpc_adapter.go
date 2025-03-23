@@ -14,8 +14,8 @@ import (
 
 	gwruntime "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/timot/Quant_WebWork_GO/QUANT_WW_GO/internal/core/config"
-	"github.com/timot/Quant_WebWork_GO/QUANT_WW_GO/internal/core/metrics"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/core/config"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/core/metrics"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -886,3 +886,7 @@ func NewBridgeError(code string, message string, details map[string]interface{})
 func (e *BridgeError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }
+
+
+
+

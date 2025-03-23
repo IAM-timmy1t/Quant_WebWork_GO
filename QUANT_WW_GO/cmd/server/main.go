@@ -11,10 +11,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/timot/Quant_WebWork_GO/QUANT_WW_GO/internal/core/config"
-	"github.com/timot/Quant_WebWork_GO/QUANT_WW_GO/internal/core/discovery"
-	"github.com/timot/Quant_WebWork_GO/QUANT_WW_GO/internal/core/metrics"
-	"github.com/timot/Quant_WebWork_GO/QUANT_WW_GO/internal/security"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/core/config"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/core/discovery"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/core/metrics"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/security"
 )
 
 const (
@@ -127,15 +127,21 @@ func setupConfiguration(configPath string) (*config.Manager, error) {
 }
 
 func setupMetrics(configManager *config.Manager) *metrics.Collector {
-	// Create metrics collector
-	collector := metrics.NewCollector(&metrics.CollectorConfig{
-		ServiceName:    serviceName,
-		RecordInterval: 10 * time.Second,
-		HistorySize:    100,
-	})
+	// Create metrics collector with default config
+	config := &metrics.Config{
+		BatchSize:     100,
+		FlushInterval: 10 * time.Second,
+		// Use default values for other fields
+	}
+	
+	collector := metrics.NewCollector(config)
 	
 	// Initialize and start the collector
-	collector.Start()
+	// Create a background context
+	ctx := context.Background()
+	if err := collector.Start(ctx); err != nil {
+		log.Printf("Error starting metrics collector: %v", err)
+	}
 	
 	return collector
 }
@@ -307,3 +313,5 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.status = code
 	rw.ResponseWriter.WriteHeader(code)
 }
+
+

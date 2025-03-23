@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"github.com/timot/Quant_WebWork_GO/internal/bridge/protocol"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/bridge/protocol"
 )
 
 // MockBridge implements the Bridge interface for testing
@@ -298,3 +298,6 @@ func TestGRPCAdapter(t *testing.T) {
 		assert.Equal(t, "grpc", adapter.ID())
 	})
 }
+
+
+

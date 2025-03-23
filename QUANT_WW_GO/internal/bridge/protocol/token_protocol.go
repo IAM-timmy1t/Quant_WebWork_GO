@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"time"
 	
-	"github.com/quant-webworks/go/internal/core/tokens"
-	"github.com/quant-webworks/go/internal/security/risk"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/core/tokens"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/security/risk"
 )
 
 // Common errors
@@ -699,3 +699,6 @@ func getRiskLevel(riskScore float64) string {
 		return "high"
 	}
 }
+
+
+

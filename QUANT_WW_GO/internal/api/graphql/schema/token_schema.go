@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/graphql-go/graphql"
-	"github.com/quant-webworks/go/internal/security/risk"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/security/risk"
 )
 
 // TokenAnalysisTypes defines GraphQL types for token analysis
@@ -424,3 +424,6 @@ func resolveModelProfiles(analyzer *risk.TokenAnalyzer) graphql.FieldResolveFn {
 		return result, nil
 	}
 }
+
+
+

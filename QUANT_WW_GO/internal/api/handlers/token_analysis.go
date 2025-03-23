@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/quant-webworks/go/internal/security/risk"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/security/risk"
 )
 
 // TokenAnalysisRequest represents the request body for token analysis
@@ -148,3 +148,6 @@ func (h *TokenAnalysisHandler) HandleTokenAnalysis(w http.ResponseWriter, r *htt
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
 }
+
+
+

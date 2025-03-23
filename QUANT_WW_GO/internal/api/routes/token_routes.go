@@ -5,8 +5,8 @@ package routes
 import (
 	"net/http"
 
-	"github.com/quant-webworks/go/internal/api/handlers"
-	"github.com/quant-webworks/go/internal/security/risk"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/api/handlers"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/security/risk"
 )
 
 // RegisterTokenRoutes registers all token-related routes
@@ -20,3 +20,6 @@ func RegisterTokenRoutes(router *http.ServeMux, tokenAnalyzer *risk.TokenAnalyze
 	// For backwards compatibility
 	router.HandleFunc("/api/v1/security/token-analysis", tokenHandler.HandleTokenAnalysis)
 }
+
+
+

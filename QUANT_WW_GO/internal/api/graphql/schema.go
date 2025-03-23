@@ -4,8 +4,8 @@ package graphql
 
 import (
 	"github.com/graphql-go/graphql"
-	"github.com/quant-webworks/go/internal/api/graphql/schema"
-	"github.com/quant-webworks/go/internal/security/risk"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/api/graphql/schema"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/security/risk"
 )
 
 // Schema defines the GraphQL schema for the application
@@ -478,3 +478,6 @@ func resolveUpdateRiskModel(engine *risk.Engine) graphql.FieldResolveFn {
 		return nil, nil
 	}
 }
+
+
+

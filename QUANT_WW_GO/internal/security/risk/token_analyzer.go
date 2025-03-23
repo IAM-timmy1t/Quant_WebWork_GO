@@ -338,7 +338,7 @@ func compressTokens(content string, compressionLevel int) string {
     if len(targetModels) > 0 {
         codeSnippet := `
 // Example token conversion implementation
-import "github.com/quant-webworks/go/internal/security/risk"
+import "github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/security/risk"
 
 func convertTokensBetweenModels(
     sourceModel string,
@@ -536,3 +536,6 @@ func (t *TokenAnalyzer) registerDefaultModels() {
         t.RegisterModelProfile(profile)
     }
 }
+
+
+

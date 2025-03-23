@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/quant-webworks/go/internal/bridge/adapter"
-	"github.com/quant-webworks/go/internal/bridge/protocol"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/bridge/adapter"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/bridge/protocol"
 )
 
 // BridgeEvent represents an event in the bridge system
@@ -626,3 +626,6 @@ func (l *noopLogger) Debug(msg string, fields map[string]interface{}) {}
 func (l *noopLogger) Info(msg string, fields map[string]interface{})  {}
 func (l *noopLogger) Warn(msg string, fields map[string]interface{})  {}
 func (l *noopLogger) Error(msg string, fields map[string]interface{}) {}
+
+
+

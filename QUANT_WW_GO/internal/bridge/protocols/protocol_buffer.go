@@ -592,7 +592,7 @@ func (s *ServiceDefinition) GenerateProto() string {
 	
 	sb.WriteString(fmt.Sprintf("syntax = \"proto3\";\n\n"))
 	sb.WriteString(fmt.Sprintf("package %s;\n\n", strings.ToLower(string(s.Type))))
-	sb.WriteString(fmt.Sprintf("option go_package = \"github.com/quant-webworks/go/internal/bridge/protocols/%s\";\n\n", strings.ToLower(string(s.Type))))
+	sb.WriteString(fmt.Sprintf("option go_package = \"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/bridge/protocols/%s\";\n\n", strings.ToLower(string(s.Type))))
 	
 	sb.WriteString(fmt.Sprintf("// %s\n", s.Description))
 	sb.WriteString(fmt.Sprintf("service %s {\n", s.Name))
@@ -641,3 +641,4 @@ func ConvertToProtobufMessage(data interface{}) (*Message, error) {
 		},
 	}, nil
 }
+

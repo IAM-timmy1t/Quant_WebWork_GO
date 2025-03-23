@@ -1,8 +1,17 @@
-module github.com/timot/Quant_WebWork_GO
+module github.com/IAM-timmy1t/Quant_WebWork_GO
 
-go 1.23.0
+go 1.21
 
 toolchain go1.24.0
+
+// Add replace directives to handle missing repositories
+replace (
+	github.com/IAM-timmy1t/Quant_WebWork_GO => ./
+	github.com/quant-webworks/go => ./
+	google.golang.org/grpc/web => github.com/improbable-eng/grpc-web v0.15.0
+	// Fix the ambiguous import for google.golang.org/genproto with a known good version
+	google.golang.org/genproto => google.golang.org/genproto v0.0.0-20230803162519-f966b187b2e5
+)
 
 require (
 	github.com/go-chi/chi/v5 v5.0.11

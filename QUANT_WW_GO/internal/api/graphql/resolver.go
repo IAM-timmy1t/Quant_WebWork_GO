@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/graphql-go/graphql"
-	"github.com/quant-webworks/go/internal/api/graphql/schema"
-	"github.com/quant-webworks/go/internal/security/risk"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/api/graphql/schema"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/security/risk"
 )
 
 // Resolver handles GraphQL query resolution
@@ -377,3 +377,6 @@ func (r *Resolver) resolveUpdateRiskModel() graphql.FieldResolveFn {
 		}, nil
 	}
 }
+
+
+

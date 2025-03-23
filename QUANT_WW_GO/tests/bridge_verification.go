@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/timot/Quant_WebWork_GO/internal/bridge"
-	"github.com/timot/Quant_WebWork_GO/internal/bridge/adapters"
-	"github.com/timot/Quant_WebWork_GO/internal/bridge/protocol"
-	"github.com/timot/Quant_WebWork_GO/internal/core/tokens"
-	"github.com/timot/Quant_WebWork_GO/internal/security/risk"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/bridge"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/bridge/adapters"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/bridge/protocol"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/core/tokens"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/security/risk"
 )
 
 // TestBridgeModuleVerification verifies that the bridge module works correctly with
@@ -491,3 +491,6 @@ func main() {
 		[]testing.InternalTest{{Name: "BridgeModuleVerification", F: TestBridgeModuleVerification}},
 		nil, nil)
 }
+
+
+

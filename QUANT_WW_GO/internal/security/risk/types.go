@@ -6,7 +6,7 @@ import (
     "regexp"
     "time"
 
-    "github.com/timot/Quant_WebWork_GO/QUANT_WW_GO/internal/security"
+    "github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/QUANT_WW_GO/internal/security"
 )
 
 // Config defines risk analyzer configuration
@@ -177,3 +177,7 @@ func compareNumeric(a, b interface{}) int {
     }
     return 0
 }
+
+
+
+

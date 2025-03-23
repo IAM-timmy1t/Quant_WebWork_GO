@@ -6,6 +6,14 @@ import (
     "time"
 )
 
+// Metric type constants
+const (
+    MetricTypeCounter   = "counter"
+    MetricTypeGauge     = "gauge"
+    MetricTypeHistogram = "histogram"
+    MetricTypeSummary   = "summary"
+)
+
 // Metric represents a single data point with metadata
 type Metric struct {
     ID        string            `json:"id"`          // Unique identifier for the metric
@@ -17,6 +25,7 @@ type Metric struct {
     Labels    map[string]string `json:"labels,omitempty"` // Additional labels for filtering
     Timestamp time.Time         `json:"timestamp"`   // Time when the metric was collected
     Unit      string            `json:"unit,omitempty"` // Optional unit of measurement
+    Metadata  map[string]interface{} `json:"metadata,omitempty"` // Additional metadata for the metric
 }
 
 // Config defines configuration for the metrics system
