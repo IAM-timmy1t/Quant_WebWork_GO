@@ -1,6 +1,6 @@
 // adapter.go - Bridge adapter interfaces and base implementation
 
-package adapter
+package adapters
 
 import (
 	"context"
