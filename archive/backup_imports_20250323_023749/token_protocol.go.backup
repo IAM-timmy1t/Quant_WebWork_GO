@@ -1,0 +1,703 @@
+// token_protocol.go - Token-aware protocol implementation
+
+package protocol
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+	
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/internal/core/tokens"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/QUANT_WW_GO/internal/security/risk"
+)
+
+// Common errors
+var (
+	ErrTokenBudgetExceeded = errors.New("token budget exceeded")
+	ErrUnsupportedModel    = errors.New("unsupported model")
+	ErrInvalidTokenRequest = errors.New("invalid token request")
+	ErrInvalidFormat       = errors.New("invalid message format")
+	ErrInvalidMessageType  = errors.New("invalid message type")
+	ErrFrontendNotSupported = errors.New("frontend not supported")
+)
+
+// MessageFormat defines the format of messages
+type MessageFormat string
+
+// Supported message formats
+const (
+	MessageFormatJSON     MessageFormat = "json"
+	MessageFormatProtobuf MessageFormat = "protobuf"
+	MessageFormatMsgPack  MessageFormat = "msgpack"
+)
+
+// MessageType defines the type of messages
+type MessageType string
+
+// Supported message types
+const (
+	MessageTypeAnalysisRequest  MessageType = "analysis-request"
+	MessageTypeAnalysisResponse MessageType = "analysis-response"
+	MessageTypeRiskRequest      MessageType = "risk-request"
+	MessageTypeRiskResponse     MessageType = "risk-response"
+	MessageTypeEvent            MessageType = "event"
+	MessageTypeMetrics          MessageType = "metrics"
+	MessageTypeQuery            MessageType = "query"
+	MessageTypeQueryResponse    MessageType = "query-response"
+	MessageTypeUIUpdate         MessageType = "ui-update"
+	MessageTypeError            MessageType = "error"
+)
+
+// TokenProtocolConfig defines configuration for the token protocol
+type TokenProtocolConfig struct {
+	ModelID            string            // Target model identifier
+	MaxTokenPerMessage int               // Maximum tokens per message
+	DefaultBudget      tokens.TokenBudget // Default token budget
+	EnableCompression  bool              // Whether to enable compression
+	TokenThreshold     float64           // Threshold for token optimization (0.0-1.0)
+	MetricsEnabled     bool              // Whether to collect metrics
+	AnalyzerConfig     map[string]interface{} // Configuration for token analyzer
+	DefaultFormat      MessageFormat     // Default message format
+	EnableFrontendAPI  bool              // Whether to enable frontend API
+	CORSOrigins        []string          // Allowed CORS origins
+	MaxMessagesPerSecond int             // Rate limit for messages per second
+	EnableUIEvents     bool              // Whether to enable UI events
+	ReactEndpoints     []string          // Endpoints for React frontend
+}
+
+// TokenMetadata contains token-related metadata for messages
+type TokenMetadata struct {
+	ModelID         string    // Model identifier
+	InputTokens     int       // Input token count
+	OutputTokens    int       // Output token count
+	TotalTokens     int       // Total token count
+	TokenizationMS  int64     // Tokenization time in milliseconds
+	Timestamp       time.Time // Timestamp
+	ChunkIndex      int       // Chunk index if message is chunked
+	TotalChunks     int       // Total number of chunks
+	CompressionRate float64   // Compression rate if compression is enabled
+	RiskScore       float64   // Risk score from token analyzer
+	FormatVersion   string    // Format version
+	ClientInfo      ClientInfo // Client information
+}
+
+// ClientInfo contains information about the client
+type ClientInfo struct {
+	Type        string            // Client type (web, mobile, etc.)
+	Version     string            // Client version
+	Environment string            // Client environment
+	Platform    string            // Client platform
+	Metadata    map[string]string // Additional client metadata
+}
+
+// TokenProtocol implements a token-aware protocol
+type TokenProtocol struct {
+	BaseProtocol              // Embed the base protocol
+	config       TokenProtocolConfig  // Protocol configuration
+	planner      *tokens.Planner      // Token planner
+	analyzer     *risk.TokenAnalyzer  // Token analyzer
+	moduleName   string               // Module name for token allocation
+	metrics      *ProtocolMetrics     // Protocol metrics
+	frontendHandlers map[MessageType]FrontendMessageHandler // Handlers for frontend messages
+}
+
+// FrontendMessageHandler defines a handler for frontend messages
+type FrontendMessageHandler func(ctx context.Context, msg *TokenProtocolMessage) (*TokenProtocolMessage, error)
+
+// ProtocolMetrics collects metrics for the token protocol
+type ProtocolMetrics struct {
+	MessagesProcessed     int64     // Number of messages processed
+	TokensProcessed       int64     // Number of tokens processed
+	ChunkedMessages       int64     // Number of messages that required chunking
+	CompressionSavings    int64     // Number of tokens saved by compression
+	AnalysisCount         int64     // Number of token analysis performed
+	AverageRiskScore      float64   // Average risk score
+	TokenUsageByModel     map[string]int64 // Token usage by model
+	LastUpdated           time.Time // Last update time
+	MessagesByType        map[MessageType]int64 // Messages by type
+	FrontendRequests      int64     // Number of frontend requests
+	UIEventsSent          int64     // Number of UI events sent
+	ErrorCount            int64     // Number of errors
+	MeanProcessingTimeMS  float64   // Mean processing time in milliseconds
+}
+
+// NewTokenProtocol creates a new token-aware protocol
+func NewTokenProtocol(config TokenProtocolConfig, planner *tokens.Planner, analyzer *risk.TokenAnalyzer) *TokenProtocol {
+	if analyzer == nil {
+		analyzer = risk.NewTokenAnalyzer(nil)
+	}
+	
+	protocol := &TokenProtocol{
+		config:   config,
+		planner:  planner,
+		analyzer: analyzer,
+		moduleName: "bridge.token.protocol",
+		metrics: &ProtocolMetrics{
+			TokenUsageByModel: make(map[string]int64),
+			MessagesByType: make(map[MessageType]int64),
+			LastUpdated: time.Now(),
+		},
+		frontendHandlers: make(map[MessageType]FrontendMessageHandler),
+	}
+	
+	// Initialize base protocol
+	protocol.BaseProtocol = BaseProtocol{
+		name:    "token-protocol",
+		version: "1.0.0",
+		status:  ProtocolStatusInitialized,
+	}
+
+	// Register default handlers
+	protocol.registerDefaultHandlers()
+	
+	return protocol
+}
+
+// registerDefaultHandlers registers default message handlers
+func (p *TokenProtocol) registerDefaultHandlers() {
+	// Analysis request handler
+	p.RegisterFrontendHandler(MessageTypeAnalysisRequest, func(ctx context.Context, msg *TokenProtocolMessage) (*TokenProtocolMessage, error) {
+		// Perform token analysis
+		tokenAddress, ok := msg.Metadata["token_address"].(string)
+		if !ok {
+			return createErrorResponse(msg, "missing token_address parameter"), nil
+		}
+
+		// Create analysis request
+		analysisReq := risk.AnalysisRequest{
+			TokenAddress: tokenAddress,
+			IncludeDetails: true,
+		}
+
+		// Perform analysis
+		result, err := p.analyzer.AnalyzeToken(ctx, analysisReq)
+		if err != nil {
+			return createErrorResponse(msg, fmt.Sprintf("analysis failed: %v", err)), nil
+		}
+
+		// Create response
+		response := createResponseMessage(msg, MessageTypeAnalysisResponse)
+		response.Metadata["analysis_result"] = result.GetSummary()
+		response.Metadata["risk_score"] = result.GetRiskScore()
+		response.TokenInfo.RiskScore = result.GetRiskScore()
+
+		return response, nil
+	})
+
+	// Risk request handler
+	p.RegisterFrontendHandler(MessageTypeRiskRequest, func(ctx context.Context, msg *TokenProtocolMessage) (*TokenProtocolMessage, error) {
+		// Extract token addresses
+		tokenAddresses, ok := msg.Metadata["token_addresses"].([]string)
+		if !ok {
+			return createErrorResponse(msg, "missing token_addresses parameter"), nil
+		}
+
+		// Perform risk analysis for each token
+		results := make(map[string]interface{})
+		for _, addr := range tokenAddresses {
+			result, err := p.analyzer.AnalyzeToken(ctx, risk.AnalysisRequest{
+				TokenAddress: addr,
+				IncludeDetails: false,
+			})
+			
+			if err != nil {
+				results[addr] = map[string]interface{}{
+					"error": err.Error(),
+				}
+			} else {
+				results[addr] = map[string]interface{}{
+					"risk_score": result.GetRiskScore(),
+					"risk_level": getRiskLevel(result.GetRiskScore()),
+					"confidence": result.GetConfidence(),
+				}
+			}
+		}
+
+		// Create response
+		response := createResponseMessage(msg, MessageTypeRiskResponse)
+		response.Metadata["risk_results"] = results
+
+		return response, nil
+	})
+
+	// Metrics request handler
+	p.RegisterFrontendHandler(MessageTypeMetrics, func(ctx context.Context, msg *TokenProtocolMessage) (*TokenProtocolMessage, error) {
+		// Create metrics response
+		response := createResponseMessage(msg, MessageTypeMetrics)
+		response.Metadata["metrics"] = p.metrics
+
+		return response, nil
+	})
+}
+
+// RegisterFrontendHandler registers a handler for a frontend message type
+func (p *TokenProtocol) RegisterFrontendHandler(msgType MessageType, handler FrontendMessageHandler) {
+	p.frontendHandlers[msgType] = handler
+}
+
+// TokenProtocolMessage represents a message in the token protocol
+type TokenProtocolMessage struct {
+	ID          string                 `json:"id"`
+	Content     string                 `json:"content"`
+	Metadata    map[string]interface{} `json:"metadata"`
+	TokenInfo   TokenMetadata          `json:"token_info"`
+	Timestamp   time.Time              `json:"timestamp"`
+	Type        MessageType            `json:"type"`
+	Compression string                 `json:"compression,omitempty"`
+	Format      MessageFormat          `json:"format,omitempty"`
+	Version     string                 `json:"version,omitempty"`
+}
+
+// Process handles incoming messages with token awareness
+func (p *TokenProtocol) Process(ctx context.Context, msg Message) (Message, error) {
+	// Check protocol status
+	if p.Status() != ProtocolStatusConnected {
+		return nil, ErrProtocolNotConnected
+	}
+	
+	startTime := time.Now()
+	
+	// Parse the message
+	tokenMsg, err := p.parseMessage(msg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse message: %w", err)
+	}
+	
+	// Handle frontend messages if enabled
+	if p.config.EnableFrontendAPI {
+		if handler, ok := p.frontendHandlers[tokenMsg.Type]; ok {
+			responseMsg, err := handler(ctx, tokenMsg)
+			if err != nil {
+				// Create error response
+				errMsg := createErrorResponse(tokenMsg, err.Error())
+				serialized, serErr := p.serializeMessage(errMsg)
+				if serErr != nil {
+					return nil, fmt.Errorf("failed to serialize error message: %w", serErr)
+				}
+				p.updateMetrics(errMsg)
+				return serialized, nil
+			}
+			
+			// Serialize and return response
+			serialized, err := p.serializeMessage(responseMsg)
+			if err != nil {
+				return nil, fmt.Errorf("failed to serialize response message: %w", err)
+			}
+			p.updateMetrics(responseMsg)
+			return serialized, nil
+		}
+	}
+	
+	// Analyze token usage
+	analysis, err := p.analyzeTokens(ctx, tokenMsg)
+	if err != nil {
+		// Log but continue - analysis is optional
+		if p.BaseProtocol.logger != nil {
+			p.BaseProtocol.logger.Error("token analysis failed", map[string]interface{}{
+				"error": err.Error(),
+				"msg_id": tokenMsg.ID,
+			})
+		}
+	} else {
+		// Update the message with analysis results
+		tokenMsg.TokenInfo.RiskScore = analysis.GetRiskScore()
+		tokenMsg.Metadata["token_analysis"] = analysis.GetSummary()
+	}
+	
+	// Check token budget
+	if p.planner != nil {
+		totalTokens := tokenMsg.TokenInfo.TotalTokens
+		if totalTokens == 0 {
+			// Estimate token count for unknown tokens
+			totalTokens = len(tokenMsg.Content) / 4 // Rough estimate of 4 chars per token
+		}
+		
+		// Request token allocation
+		allocRequest := tokens.AllocationRequest{
+			ModuleName:      p.moduleName,
+			ModelID:         tokenMsg.TokenInfo.ModelID,
+			RequestedTokens: totalTokens,
+			Purpose:         "message_processing",
+			Metadata: map[string]interface{}{
+				"message_id": tokenMsg.ID,
+				"message_type": string(tokenMsg.Type),
+			},
+		}
+		
+		allocation, err := p.planner.AllocateTokens(ctx, allocRequest)
+		if err != nil {
+			if errors.Is(err, tokens.ErrBudgetExceeded) {
+				return nil, ErrTokenBudgetExceeded
+			}
+			return nil, fmt.Errorf("token allocation failed: %w", err)
+		}
+		
+		// Update token info with allocation details
+		tokenMsg.Metadata["token_allocation"] = map[string]interface{}{
+			"allocated": allocation.AllocatedTokens,
+			"model_id": allocation.ModelID,
+		}
+	}
+	
+	// Apply optimizations if needed
+	if p.shouldOptimize(tokenMsg) {
+		if err := p.optimizeMessage(tokenMsg); err != nil {
+			// Log but continue - optimization is optional
+			if p.BaseProtocol.logger != nil {
+				p.BaseProtocol.logger.Warn("message optimization failed", map[string]interface{}{
+					"error": err.Error(),
+					"msg_id": tokenMsg.ID,
+				})
+			}
+		}
+	}
+	
+	// Update metrics
+	p.updateMetrics(tokenMsg)
+	
+	// Calculate processing time
+	processingTime := time.Since(startTime).Milliseconds()
+	tokenMsg.Metadata["processing_time_ms"] = processingTime
+	
+	// Serialize the message before returning
+	responseMsg, err := p.serializeMessage(tokenMsg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize message: %w", err)
+	}
+	
+	return responseMsg, nil
+}
+
+// parseMessage parses the incoming message into a TokenProtocolMessage
+func (p *TokenProtocol) parseMessage(msg Message) (*TokenProtocolMessage, error) {
+	// Check if the message is already a TokenProtocolMessage
+	if tokenMsg, ok := msg.(*TokenProtocolMessage); ok {
+		return tokenMsg, nil
+	}
+	
+	// Try to parse from raw message
+	data, err := msg.Payload()
+	if err != nil {
+		return nil, err
+	}
+	
+	var tokenMsg TokenProtocolMessage
+	if err := json.Unmarshal(data, &tokenMsg); err != nil {
+		// If not a token message, create a new one from the raw message
+		content, err := msg.Content()
+		if err != nil {
+			return nil, err
+		}
+		
+		tokenMsg = TokenProtocolMessage{
+			ID:        msg.ID(),
+			Content:   content,
+			Metadata:  make(map[string]interface{}),
+			Timestamp: time.Now(),
+			Type:      MessageTypeEvent,
+			TokenInfo: TokenMetadata{
+				ModelID:    p.config.ModelID,
+				Timestamp:  time.Now(),
+				InputTokens: 0, // Will be estimated later
+				OutputTokens: 0,
+			},
+		}
+	}
+	
+	// Ensure model ID is set
+	if tokenMsg.TokenInfo.ModelID == "" {
+		tokenMsg.TokenInfo.ModelID = p.config.ModelID
+	}
+	
+	// Initialize metadata if nil
+	if tokenMsg.Metadata == nil {
+		tokenMsg.Metadata = make(map[string]interface{})
+	}
+	
+	return &tokenMsg, nil
+}
+
+// serializeMessage serializes the TokenProtocolMessage into a regular Message
+func (p *TokenProtocol) serializeMessage(msg *TokenProtocolMessage) (Message, error) {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return nil, err
+	}
+	
+	return NewRawMessage(msg.ID, string(msg.Type), data), nil
+}
+
+// analyzeTokens analyzes token usage for the message
+func (p *TokenProtocol) analyzeTokens(ctx context.Context, msg *TokenProtocolMessage) (*risk.AnalyzerResult, error) {
+	if p.analyzer == nil {
+		return nil, errors.New("token analyzer not available")
+	}
+	
+	// Prepare analysis target
+	target := map[string]interface{}{
+		"content":       msg.Content,
+		"model":         msg.TokenInfo.ModelID,
+		"input_tokens":  msg.TokenInfo.InputTokens,
+		"output_tokens": msg.TokenInfo.OutputTokens,
+		"message_type":  string(msg.Type),
+	}
+	
+	// Analysis options
+	options := p.config.AnalyzerConfig
+	if options == nil {
+		options = map[string]interface{}{
+			"detailed_analysis":       true,
+			"include_recommendations": true,
+		}
+	}
+	
+	return p.analyzer.Analyze(ctx, target, options)
+}
+
+// shouldOptimize determines if the message should be optimized
+func (p *TokenProtocol) shouldOptimize(msg *TokenProtocolMessage) bool {
+	// Check threshold
+	if p.config.TokenThreshold > 0 {
+		// Get budget for the model
+		budget, err := p.planner.GetTokenBudget(msg.TokenInfo.ModelID)
+		if err == nil {
+			// Calculate current usage ratio
+			totalTokens := msg.TokenInfo.TotalTokens
+			if totalTokens == 0 {
+				totalTokens = len(msg.Content) / 4 // Rough estimate
+			}
+			
+			usageRatio := float64(totalTokens) / float64(budget.TotalTokens)
+			return usageRatio >= p.config.TokenThreshold
+		}
+	}
+	
+	// Default: optimize if message exceeds max tokens per message
+	if p.config.MaxTokenPerMessage > 0 {
+		estimatedTokens := len(msg.Content) / 4
+		return estimatedTokens > p.config.MaxTokenPerMessage
+	}
+	
+	return false
+}
+
+// optimizeMessage optimizes the message to reduce token usage
+func (p *TokenProtocol) optimizeMessage(msg *TokenProtocolMessage) error {
+	// Apply compression if enabled
+	if p.config.EnableCompression {
+		originalSize := len(msg.Content)
+		
+		// This is a placeholder for actual compression logic
+		// In a real implementation, you would use a compression algorithm
+		// that preserves semantic meaning while reducing token count
+		
+		// For now, we'll just simulate compression by noting it in metadata
+		msg.Metadata["compression_applied"] = true
+		
+		// Calculate simulated compression rate
+		compressedSize := originalSize // In a real implementation, this would be smaller
+		msg.TokenInfo.CompressionRate = float64(compressedSize) / float64(originalSize)
+	}
+	
+	// Check if chunking is needed
+	if p.config.MaxTokenPerMessage > 0 {
+		estimatedTokens := len(msg.Content) / 4
+		if estimatedTokens > p.config.MaxTokenPerMessage {
+			// Mark as requiring chunking
+			msg.Metadata["requires_chunking"] = true
+			msg.TokenInfo.TotalChunks = (estimatedTokens / p.config.MaxTokenPerMessage) + 1
+			msg.TokenInfo.ChunkIndex = 0 // First chunk
+			
+			// In a real implementation, this would actually chunk the message
+			// and send multiple messages, but for this prototype we'll just
+			// note it in the metadata
+		}
+	}
+	
+	return nil
+}
+
+// updateMetrics updates protocol metrics
+func (p *TokenProtocol) updateMetrics(msg *TokenProtocolMessage) {
+	p.metrics.MessagesProcessed++
+	p.metrics.TokensProcessed += int64(msg.TokenInfo.TotalTokens)
+	
+	if msg.TokenInfo.TotalChunks > 1 {
+		p.metrics.ChunkedMessages++
+	}
+	
+	if rate, exists := msg.Metadata["compression_rate"].(float64); exists && rate < 1.0 {
+		tokensSaved := int64(float64(msg.TokenInfo.TotalTokens) * (1.0 - rate))
+		p.metrics.CompressionSavings += tokensSaved
+	}
+	
+	if msg.TokenInfo.RiskScore > 0 {
+		// Update average risk score using weighted average
+		oldAvg := p.metrics.AverageRiskScore
+		oldCount := float64(p.metrics.AnalysisCount)
+		newScore := msg.TokenInfo.RiskScore
+		
+		p.metrics.AverageRiskScore = (oldAvg*oldCount + newScore) / (oldCount + 1)
+		p.metrics.AnalysisCount++
+	}
+	
+	// Update token usage by model
+	modelID := msg.TokenInfo.ModelID
+	p.metrics.TokenUsageByModel[modelID] += int64(msg.TokenInfo.TotalTokens)
+	
+	p.metrics.LastUpdated = time.Now()
+}
+
+// GetMetrics returns current protocol metrics
+func (p *TokenProtocol) GetMetrics() *ProtocolMetrics {
+	return p.metrics
+}
+
+// Configure configures the token protocol
+func (p *TokenProtocol) Configure(config map[string]interface{}) error {
+	// Update configuration
+	if modelID, ok := config["model_id"].(string); ok {
+		p.config.ModelID = modelID
+	}
+	
+	if maxTokens, ok := config["max_tokens_per_message"].(int); ok {
+		p.config.MaxTokenPerMessage = maxTokens
+	}
+	
+	if threshold, ok := config["token_threshold"].(float64); ok {
+		p.config.TokenThreshold = threshold
+	}
+	
+	if enableCompression, ok := config["enable_compression"].(bool); ok {
+		p.config.EnableCompression = enableCompression
+	}
+	
+	if metricsEnabled, ok := config["metrics_enabled"].(bool); ok {
+		p.config.MetricsEnabled = metricsEnabled
+	}
+	
+	if analyzerConfig, ok := config["analyzer_config"].(map[string]interface{}); ok {
+		p.config.AnalyzerConfig = analyzerConfig
+	}
+	
+	if defaultFormat, ok := config["default_format"].(string); ok {
+		p.config.DefaultFormat = MessageFormat(defaultFormat)
+	}
+	
+	if enableFrontendAPI, ok := config["enable_frontend_api"].(bool); ok {
+		p.config.EnableFrontendAPI = enableFrontendAPI
+	}
+	
+	if corsOrigins, ok := config["cors_origins"].([]string); ok {
+		p.config.CORSOrigins = corsOrigins
+	}
+	
+	if maxMessagesPerSecond, ok := config["max_messages_per_second"].(int); ok {
+		p.config.MaxMessagesPerSecond = maxMessagesPerSecond
+	}
+	
+	if enableUIEvents, ok := config["enable_ui_events"].(bool); ok {
+		p.config.EnableUIEvents = enableUIEvents
+	}
+	
+	if reactEndpoints, ok := config["react_endpoints"].([]string); ok {
+		p.config.ReactEndpoints = reactEndpoints
+	}
+	
+	return p.BaseProtocol.Configure(config)
+}
+
+// Connect establishes the protocol connection
+func (p *TokenProtocol) Connect(ctx context.Context) error {
+	// Register with token planner if available
+	if p.planner != nil {
+		err := p.planner.RegisterModule(p.moduleName, tokens.ModuleConstraint{
+			MinTokens:     1000,
+			MaxTokens:     p.config.MaxTokenPerMessage * 10,
+			IdealTokens:   p.config.MaxTokenPerMessage * 5,
+			Priority:      0.7,
+			ScalingFactor: 0.8,
+		})
+		
+		if err != nil && !errors.Is(err, tokens.ErrModuleNotRegistered) {
+			return fmt.Errorf("failed to register with token planner: %w", err)
+		}
+	}
+	
+	return p.BaseProtocol.Connect(ctx)
+}
+
+// Disconnect closes the protocol connection
+func (p *TokenProtocol) Disconnect(ctx context.Context) error {
+	// Final metrics snapshot before disconnecting
+	if p.config.MetricsEnabled && p.BaseProtocol.logger != nil {
+		p.BaseProtocol.logger.Info("token protocol disconnecting with metrics", map[string]interface{}{
+			"messages_processed": p.metrics.MessagesProcessed,
+			"tokens_processed":   p.metrics.TokensProcessed,
+			"compression_savings": p.metrics.CompressionSavings,
+			"average_risk_score": p.metrics.AverageRiskScore,
+		})
+	}
+	
+	return p.BaseProtocol.Disconnect(ctx)
+}
+
+// ID returns the unique identifier for this protocol instance
+func (p *TokenProtocol) ID() string {
+	return p.BaseProtocol.ID() + "-token"
+}
+
+// HandleBridgeEvent handles events from the bridge
+func (p *TokenProtocol) HandleBridgeEvent(event BridgeEvent) error {
+	// Process token-specific events
+	if event.Type == "token.budget.update" {
+		if p.BaseProtocol.logger != nil {
+			p.BaseProtocol.logger.Info("token budget updated", event.Payload)
+		}
+	}
+	
+	// Pass to base handler
+	return p.BaseProtocol.HandleBridgeEvent(event)
+}
+
+// createErrorResponse creates an error response message
+func createErrorResponse(msg *TokenProtocolMessage, errorMessage string) *TokenProtocolMessage {
+	errorMetadata := make(map[string]interface{})
+	errorMetadata["error"] = errorMessage
+	
+	return &TokenProtocolMessage{
+		ID:        msg.ID,
+		Content:   "",
+		Metadata:  errorMetadata,
+		Timestamp: time.Now(),
+		Type:      MessageTypeError,
+		TokenInfo: msg.TokenInfo,
+	}
+}
+
+// createResponseMessage creates a response message
+func createResponseMessage(msg *TokenProtocolMessage, responseType MessageType) *TokenProtocolMessage {
+	return &TokenProtocolMessage{
+		ID:        msg.ID,
+		Content:   "",
+		Metadata:  msg.Metadata,
+		Timestamp: time.Now(),
+		Type:      responseType,
+		TokenInfo: msg.TokenInfo,
+	}
+}
+
+// getRiskLevel returns the risk level based on the risk score
+func getRiskLevel(riskScore float64) string {
+	if riskScore < 0.3 {
+		return "low"
+	} else if riskScore < 0.7 {
+		return "medium"
+	} else {
+		return "high"
+	}
+}
+
+

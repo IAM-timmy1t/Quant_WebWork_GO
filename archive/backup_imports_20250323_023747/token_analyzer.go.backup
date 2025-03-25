@@ -1,0 +1,539 @@
+// token_analyzer.go - Advanced token risk assessment
+
+package risk
+
+import (
+    "context"
+    "encoding/json"
+    "errors"
+    "fmt"
+    "regexp"
+    "sync"
+    "time"
+)
+
+// TokenAnalyzer provides specialized analysis of token-related risks
+type TokenAnalyzer struct {
+    config         TokenRiskConfig
+    patterns       []*regexp.Regexp
+    modelProfiles  map[string]ModelProfile
+    mu             sync.RWMutex
+    converter      *TokenConverter // Add token converter for cross-model analysis
+}
+
+// NewTokenAnalyzer creates a new token analyzer
+func NewTokenAnalyzer(config TokenRiskConfig) *TokenAnalyzer {
+    analyzer := &TokenAnalyzer{
+        config:       config,
+        modelProfiles: make(map[string]ModelProfile),
+        converter:    NewTokenConverter(), // Initialize the converter
+    }
+    
+    // Compile regex patterns
+    for _, pattern := range config.SuspiciousPatterns {
+        if pattern.Pattern != nil {
+            analyzer.patterns = append(analyzer.patterns, pattern.Pattern)
+        }
+    }
+    
+    // Initialize with some default model profiles
+    analyzer.registerDefaultModels()
+    
+    return analyzer
+}
+
+// RegisterModelProfile adds or updates a model profile
+func (t *TokenAnalyzer) RegisterModelProfile(profile ModelProfile) {
+    t.mu.Lock()
+    defer t.mu.Unlock()
+    
+    t.modelProfiles[profile.ID] = profile
+    
+    // Also register with the token converter
+    t.converter.RegisterModelCapacity(ModelTokenCapacity{
+        ModelID:          profile.ID,
+        MaxInputTokens:   profile.MaxContextTokens / 2, // Estimate input as half of total
+        MaxOutputTokens:  profile.MaxContextTokens / 2, // Estimate output as half of total
+        MaxTotalTokens:   profile.MaxContextTokens,
+        OptimalInputRange: [2]int{profile.OptimalTokenRange[0] / 2, profile.OptimalTokenRange[1] / 2},
+        OptimalOutputRange: [2]int{profile.OptimalTokenRange[0] / 2, profile.OptimalTokenRange[1] / 2},
+        TokenizationFactor: 0.25, // Default: 4 chars per token
+    })
+}
+
+// analyzeContextWindowOptimization analyzes context window usage
+func (t *TokenAnalyzer) analyzeContextWindowOptimization(tokenData map[string]interface{}, result *AnalyzerResult) {
+    t.mu.RLock()
+    defer t.mu.RUnlock()
+    
+    var totalTokens, inputTokens, outputTokens int
+    var modelID string
+    
+    // Extract token data
+    if total, ok := tokenData["total_tokens"].(float64); ok {
+        totalTokens = int(total)
+    }
+    if input, ok := tokenData["input_tokens"].(float64); ok {
+        inputTokens = int(input)
+    }
+    if output, ok := tokenData["output_tokens"].(float64); ok {
+        outputTokens = int(output)
+    }
+    if model, ok := tokenData["model"].(string); ok {
+        modelID = model
+    } else {
+        modelID = "default"
+    }
+    
+    // Get model profile
+    profile, hasProfile := t.modelProfiles[modelID]
+    if !hasProfile {
+        profile = t.modelProfiles["default"]
+    }
+    
+    // Check for multi-model data
+    targetModels := make([]string, 0)
+    if models, ok := tokenData["target_models"].([]interface{}); ok {
+        for _, m := range models {
+            if modelStr, ok := m.(string); ok {
+                targetModels = append(targetModels, modelStr)
+            }
+        }
+    }
+    
+    // Analyze context window optimization
+    var findings []*Finding
+    
+    // Basic window utilization check
+    windowUtilization := float64(totalTokens) / float64(profile.MaxContextTokens)
+    if windowUtilization > 0.9 {
+        findings = append(findings, &Finding{
+            Category: "Context Window Optimization",
+            Title:    "Context Window Near Capacity",
+            Description: fmt.Sprintf("Current token usage (%.2f%%) is approaching the model's maximum context window",
+                windowUtilization*100),
+            Severity:  SeverityHigh,
+            TokenData: map[string]interface{}{
+                "current_tokens": totalTokens,
+                "max_tokens":     profile.MaxContextTokens,
+                "utilization":    windowUtilization,
+            },
+        })
+    } else if windowUtilization < 0.3 {
+        findings = append(findings, &Finding{
+            Category: "Context Window Optimization",
+            Title:    "Context Window Underutilization",
+            Description: fmt.Sprintf("Current token usage (%.2f%%) is well below efficient utilization levels",
+                windowUtilization*100),
+            Severity:  SeverityLow,
+            TokenData: map[string]interface{}{
+                "current_tokens": totalTokens,
+                "max_tokens":     profile.MaxContextTokens,
+                "utilization":    windowUtilization,
+            },
+        })
+    }
+    
+    // Perform multi-model analysis if target models are specified
+    if len(targetModels) > 0 {
+        // For each target model, analyze token conversion requirements
+        for _, targetModel := range targetModels {
+            // Skip if same as current model
+            if targetModel == modelID {
+                continue
+            }
+            
+            // Convert tokens to target model
+            conversionResult, err := t.converter.ConvertTokens(TokenConversionRequest{
+                SourceModelID: modelID,
+                TargetModelID: targetModel,
+                InputTokens:   inputTokens,
+                OutputTokens:  outputTokens,
+                PreserveRatio: true,
+            })
+            
+            if err != nil {
+                continue
+            }
+            
+            // Check if conversion requires chunking
+            if conversionResult.RequiresChunking {
+                findings = append(findings, &Finding{
+                    Category: "Cross-Model Compatibility",
+                    Title:    "Token Count Exceeds Target Model Capacity",
+                    Description: fmt.Sprintf(
+                        "Converting from %s to %s requires chunking content into %d parts",
+                        modelID, targetModel, conversionResult.RecommendedChunks),
+                    Severity:  SeverityHigh,
+                    TokenData: map[string]interface{}{
+                        "source_model":      modelID,
+                        "target_model":      targetModel,
+                        "original_tokens":   totalTokens,
+                        "converted_tokens":  conversionResult.ConvertedInputTokens + conversionResult.ConvertedOutputTokens,
+                        "recommended_chunks": conversionResult.RecommendedChunks,
+                    },
+                })
+            }
+            
+            // Add warnings from conversion
+            for _, warning := range conversionResult.Warnings {
+                findings = append(findings, &Finding{
+                    Category:    "Cross-Model Compatibility",
+                    Title:       "Token Conversion Warning",
+                    Description: warning,
+                    Severity:    SeverityMedium,
+                    TokenData: map[string]interface{}{
+                        "source_model":     modelID,
+                        "target_model":     targetModel,
+                        "conversion_rate":  conversionResult.ConversionRate,
+                    },
+                })
+            }
+        }
+    }
+    
+    // Add all findings to the result
+    for _, finding := range findings {
+        result.AddFinding(finding)
+    }
+}
+
+// generateRecommendations generates recommendations based on findings
+func (t *TokenAnalyzer) generateRecommendations(tokenData map[string]interface{}, result *AnalyzerResult) {
+    // Extract token usage data and model info
+    var totalTokens, inputTokens, outputTokens int
+    var modelID string
+    
+    if total, ok := tokenData["total_tokens"].(float64); ok {
+        totalTokens = int(total)
+    }
+    if input, ok := tokenData["input_tokens"].(float64); ok {
+        inputTokens = int(input)
+    }
+    if output, ok := tokenData["output_tokens"].(float64); ok {
+        outputTokens = int(output)
+    }
+    if model, ok := tokenData["model"].(string); ok {
+        modelID = model
+    } else {
+        modelID = "default"
+    }
+    
+    // Get model profile
+    t.mu.RLock()
+    profile, hasProfile := t.modelProfiles[modelID]
+    if !hasProfile {
+        profile = t.modelProfiles["default"]
+    }
+    t.mu.RUnlock()
+    
+    // Check for cross-model requirements
+    targetModels := make([]string, 0)
+    if models, ok := tokenData["target_models"].([]interface{}); ok {
+        for _, m := range models {
+            if modelStr, ok := m.(string); ok {
+                targetModels = append(targetModels, modelStr)
+            }
+        }
+    }
+    
+    // Generate basic recommendations
+    
+    // Check if approaching context limit
+    if float64(totalTokens) > float64(profile.MaxContextTokens)*0.8 {
+        rec := NewRecommendationFromTemplate(
+            "Implement Content Chunking",
+            fmt.Sprintf("Current token usage (%.2f%% of max) is approaching the limit. "+
+                "Consider implementing chunking to split requests.", 
+                float64(totalTokens)/float64(profile.MaxContextTokens)*100),
+            `
+// Example chunking implementation
+func chunkContent(content string, chunkSize int, overlap int) []string {
+    // Implementation details
+}`,
+            []string{},
+        )
+        result.AddRecommendation(rec)
+    }
+    
+    // Check input/output ratio
+    if inputTokens > 0 && outputTokens > 0 {
+        ratio := float64(inputTokens) / float64(outputTokens)
+        if ratio > 10 {
+            rec := NewRecommendationFromTemplate(
+                "Optimize Input-to-Output Ratio",
+                fmt.Sprintf("Input tokens are %.1fx output tokens. "+
+                    "Consider condensing prompts for better efficiency.", ratio),
+                `
+// Example prompt optimization strategies:
+// 1. Use shorter, more precise instructions
+// 2. Reference previous conversations instead of including full history
+// 3. Use a structured format for inputs`,
+                []string{},
+            )
+            result.AddRecommendation(rec)
+        }
+    }
+    
+    // Add multi-model recommendations if applicable
+    if len(targetModels) > 0 {
+        // Create token allocations across models
+        priorityWeights := make(map[string]float64)
+        for _, model := range targetModels {
+            priorityWeights[model] = 1.0 // Default equal priority
+        }
+        
+        // Add current model
+        if !contains(targetModels, modelID) {
+            targetModels = append(targetModels, modelID)
+            priorityWeights[modelID] = 1.5 // Slightly higher priority for current model
+        }
+        
+        // Get optimized token allocation
+        allocations, err := t.converter.OptimizeTokenAllocation(
+            totalTokens,
+            targetModels,
+            priorityWeights,
+        )
+        
+        if err == nil && len(allocations) > 0 {
+            // Create allocation table for recommendation
+            allocationTable := "Model | Max Budget | Input % | Output %\n"
+            allocationTable += "--- | --- | --- | ---\n"
+            
+            for model, allocation := range allocations {
+                inputPct := allocation.InputOutputRatio * 100
+                outputPct := (1 - allocation.InputOutputRatio) * 100
+                
+                allocationTable += fmt.Sprintf("%s | %d | %.1f%% | %.1f%%\n",
+                    model, allocation.MaxBudget, inputPct, outputPct)
+            }
+            
+            rec := NewRecommendationFromTemplate(
+                "Multi-Model Token Allocation Strategy",
+                "Optimize token distribution across multiple models with the following allocation:",
+                allocationTable,
+                []string{},
+            )
+            result.AddRecommendation(rec)
+        }
+    }
+    
+    // Add model-specific recommendations
+    if modelID == "gpt-4" || modelID == "claude-3" {
+        rec := NewRecommendationFromTemplate(
+            "Enable Token Compression for Advanced Models",
+            fmt.Sprintf("The %s model supports compression techniques to optimize token usage.", modelID),
+            `
+// Example compression strategy
+func compressTokens(content string, compressionLevel int) string {
+    // Implementation details
+}`,
+            []string{},
+        )
+        result.AddRecommendation(rec)
+    }
+    
+    // Add cross-model conversion recommendation if applicable
+    if len(targetModels) > 0 {
+        codeSnippet := `
+// Example token conversion implementation
+import "github.com/IAM-timmy1t/Quant_WebWork_GO/internal/security/risk"
+
+func convertTokensBetweenModels(
+    sourceModel string,
+    targetModel string,
+    inputTokens int,
+    outputTokens int,
+) (*risk.TokenConversionResult, error) {
+    converter := risk.NewTokenConverter()
+    
+    result, err := converter.ConvertTokens(risk.TokenConversionRequest{
+        SourceModelID: sourceModel,
+        TargetModelID: targetModel,
+        InputTokens:   inputTokens,
+        OutputTokens:  outputTokens,
+        PreserveRatio: true,
+    })
+    
+    return result, err
+}`
+        
+        rec := NewRecommendationFromTemplate(
+            "Implement Cross-Model Token Conversion",
+            "Use token conversion to maintain consistency across different models",
+            codeSnippet,
+            []string{},
+        )
+        result.AddRecommendation(rec)
+    }
+}
+
+// Capabilities returns the capabilities of this analyzer
+func (t *TokenAnalyzer) Capabilities() *AnalyzerCapabilities {
+    return &AnalyzerCapabilities{
+        SupportedTargetTypes: []string{
+            "string", "map[string]interface{}", "json", "TokenAnalysisRequest",
+        },
+        SupportedOptions: []string{
+            "model_id", "input_tokens", "output_tokens", "total_tokens",
+            "target_models", "include_model_details", "detailed_analysis",
+        },
+        SupportedCategories: []string{
+            "token_efficiency", "context_window", "cost_management",
+            "model_compatibility", "performance",
+        },
+        RequiresEnrichedContext:    false,
+        SupportsIncrementalAnalysis: true,
+        ProducesRecommendations:    true,
+    }
+}
+
+// Helper function to check if a string is in a slice
+func contains(slice []string, item string) bool {
+    for _, s := range slice {
+        if s == item {
+            return true
+        }
+    }
+    return false
+}
+
+// recordMetadata adds relevant metadata to the result
+func (t *TokenAnalyzer) recordMetadata(tokenData map[string]interface{}, result *AnalyzerResult, options map[string]interface{}) {
+    // Add token data summary
+    var totalTokens, inputTokens, outputTokens int
+    var modelID string
+    
+    if total, ok := tokenData["total_tokens"].(float64); ok {
+        totalTokens = int(total)
+    }
+    if input, ok := tokenData["input_tokens"].(float64); ok {
+        inputTokens = int(input)
+    }
+    if output, ok := tokenData["output_tokens"].(float64); ok {
+        outputTokens = int(output)
+    }
+    if model, ok := tokenData["model"].(string); ok {
+        modelID = model
+    } else {
+        modelID = "default"
+    }
+    
+    // Record model profile if requested
+    includeModelDetails, _ := options["include_model_details"].(bool)
+    if includeModelDetails {
+        t.mu.RLock()
+        profile, hasProfile := t.modelProfiles[modelID]
+        if hasProfile {
+            result.Metadata["model_profile"] = profile
+        }
+        t.mu.RUnlock()
+    }
+    
+    // Record cross-model compatibility info if available
+    targetModels := make([]string, 0)
+    if models, ok := tokenData["target_models"].([]interface{}); ok {
+        for _, m := range models {
+            if modelStr, ok := m.(string); ok {
+                targetModels = append(targetModels, modelStr)
+            }
+        }
+        
+        if len(targetModels) > 0 {
+            conversions := make(map[string]map[string]float64)
+            
+            for _, targetModel := range targetModels {
+                conversions[targetModel] = map[string]float64{
+                    "rate": t.converter.GetConversionRate(modelID, targetModel),
+                }
+            }
+            
+            result.Metadata["cross_model_conversions"] = conversions
+        }
+    }
+    
+    // Record basic token stats
+    result.Metadata["token_stats"] = map[string]interface{}{
+        "total":        totalTokens,
+        "input":        inputTokens,
+        "output":       outputTokens,
+        "model":        modelID,
+        "analysis_ts":  time.Now().Format(time.RFC3339),
+    }
+    
+    // Add analyzer version and configuration
+    result.Metadata["analyzer_config"] = map[string]interface{}{
+        "version":      "1.2.0",
+        "capabilities": t.Capabilities(),
+        "options_used": options,
+    }
+}
+
+// abs returns the absolute value of a float64
+func abs(x float64) float64 {
+    if x < 0 {
+        return -x
+    }
+    return x
+}
+
+// registerDefaultModels sets up known model profiles
+func (t *TokenAnalyzer) registerDefaultModels() {
+    defaultProfiles := []ModelProfile{
+        {
+            ID:               "default",
+            MaxContextTokens: 8000,
+            OptimalTokenRange: [2]int{2000, 6000},
+            TokenCostWeighting: 1.0,
+            HasCompression:   false,
+        },
+        {
+            ID:               "gpt-3.5-turbo",
+            MaxContextTokens: 16000,
+            OptimalTokenRange: [2]int{3000, 12000},
+            TokenCostWeighting: 1.2,
+            HasCompression:   false,
+        },
+        {
+            ID:               "gpt-4",
+            MaxContextTokens: 32000,
+            OptimalTokenRange: [2]int{5000, 24000},
+            TokenCostWeighting: 2.5,
+            HasCompression:   true,
+        },
+        {
+            ID:               "claude-3-sonnet",
+            MaxContextTokens: 100000,
+            OptimalTokenRange: [2]int{80000, 95000},
+            TokenCostWeighting: 2.8,
+            HasCompression:   true,
+        },
+        {
+            ID:               "claude-3-opus",
+            MaxContextTokens: 200000,
+            OptimalTokenRange: [2]int{180000, 190000},
+            TokenCostWeighting: 3.0,
+            HasCompression:   true,
+        },
+        {
+            ID:               "llama-2-70b",
+            MaxContextTokens: 4096,
+            OptimalTokenRange: [2]int{2000, 3800},
+            TokenCostWeighting: 0.8,
+            HasCompression:   false,
+        },
+        {
+            ID:               "gemini-pro",
+            MaxContextTokens: 32768,
+            OptimalTokenRange: [2]int{5000, 30000},
+            TokenCostWeighting: 2.0,
+            HasCompression:   true,
+        },
+    }
+    
+    for _, profile := range defaultProfiles {
+        t.RegisterModelProfile(profile)
+    }
+}
+

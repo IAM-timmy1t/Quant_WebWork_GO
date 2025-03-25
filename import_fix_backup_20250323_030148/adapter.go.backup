@@ -1,0 +1,282 @@
+// adapter.go - Bridge adapter interfaces and base implementation
+
+package adapter
+
+import (
+	"context"
+	"time"
+
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/bridge/protocol"
+)
+
+// AdapterStatus represents the current status of an adapter
+type AdapterStatus string
+
+// Adapter statuses
+const (
+	StatusInitializing AdapterStatus = "initializing"
+	StatusConnected    AdapterStatus = "connected"
+	StatusConnecting   AdapterStatus = "connecting"
+	StatusDisconnected AdapterStatus = "disconnected"
+	StatusError        AdapterStatus = "error"
+	StatusStopped      AdapterStatus = "stopped"
+)
+
+// AdapterConfig contains configuration for a bridge adapter
+type AdapterConfig struct {
+	Name        string            // Unique name for the adapter
+	Description string            // Description of the adapter
+	Type        string            // Type of adapter (e.g., "api", "database", "messaging")
+	Protocol    string            // Protocol used by the adapter
+	Endpoint    string            // Connection endpoint
+	Credentials map[string]string // Credentials for authentication
+	Options     map[string]interface{} // Additional options
+	RetryConfig RetryConfig       // Configuration for retry behavior
+	Timeout     time.Duration     // Timeout for operations
+	RateLimit   RateLimit         // Rate limiting configuration
+}
+
+// RetryConfig defines retry behavior for adapters
+type RetryConfig struct {
+	MaxRetries      int           // Maximum number of retries
+	InitialInterval time.Duration // Initial interval between retries
+	MaxInterval     time.Duration // Maximum interval between retries
+	Multiplier      float64       // Factor by which to increase interval between retries
+	RandomizeFactor float64       // Factor by which to randomize interval
+}
+
+// RateLimit defines rate limiting for adapters
+type RateLimit struct {
+	RequestsPerSecond float64       // Maximum requests per second
+	BurstSize         int           // Maximum burst size
+	Window            time.Duration // Window for rate limiting
+}
+
+// AdapterMetadata contains metadata about an adapter
+type AdapterMetadata struct {
+	Name           string            // Adapter name
+	Version        string            // Adapter version
+	Type           string            // Adapter type
+	Protocol       string            // Protocol used by the adapter
+	Capabilities   []string          // Capabilities supported by the adapter
+	Dependencies   []string          // Dependencies required by the adapter
+	Author         string            // Author of the adapter
+	Documentation  string            // URL to adapter documentation
+	Tags           []string          // Tags for the adapter
+	PropertiesSchema map[string]interface{} // JSON schema for adapter properties
+}
+
+// AdapterStats contains operational statistics for an adapter
+type AdapterStats struct {
+	ConnectedSince      time.Time     // When the adapter connected
+	LastActivity        time.Time     // Last activity timestamp
+	MessagesReceived    int64         // Number of messages received
+	MessagesSent        int64         // Number of messages sent
+	Errors              int64         // Number of errors encountered
+	Reconnects          int64         // Number of reconnects
+	AverageLatency      time.Duration // Average latency for operations
+	CurrentConnections  int           // Current number of connections
+	MaxConnections      int           // Maximum number of connections
+	RateLimitExceeded   int64         // Number of times rate limit was exceeded
+	CurrentRateLimitUse float64       // Current rate limit usage (0.0-1.0)
+}
+
+// MessageHandlerFunc defines a function type for handling messages
+type MessageHandlerFunc func(ctx context.Context, message interface{}) error
+
+// Adapter defines the interface for bridge adapters
+type Adapter interface {
+	// Lifecycle methods
+	Initialize(ctx context.Context) error
+	Connect(ctx context.Context) error
+	Disconnect(ctx context.Context) error
+	Shutdown(ctx context.Context) error
+	
+	// Status methods
+	Status() AdapterStatus
+	Stats() AdapterStats
+	
+	// Configuration and information
+	Name() string
+	Type() string
+	Metadata() AdapterMetadata
+	Config() AdapterConfig
+	
+	// Communication methods
+	Send(ctx context.Context, message interface{}) error
+	Receive(ctx context.Context) (interface{}, error)
+	SetMessageHandler(handler MessageHandlerFunc)
+	
+	// Protocol methods
+	Protocol() protocol.Protocol
+	SetProtocol(protocol protocol.Protocol)
+	
+	// Error handling
+	LastError() error
+}
+
+// BaseAdapter provides a basic implementation of the Adapter interface
+type BaseAdapter struct {
+	name        string
+	adapterType string
+	config      AdapterConfig
+	metadata    AdapterMetadata
+	protocol    protocol.Protocol
+	status      AdapterStatus
+	stats       AdapterStats
+	lastError   error
+	handler     MessageHandlerFunc
+}
+
+// NewBaseAdapter creates a new base adapter
+func NewBaseAdapter(name, adapterType string, config AdapterConfig, metadata AdapterMetadata) *BaseAdapter {
+	return &BaseAdapter{
+		name:        name,
+		adapterType: adapterType,
+		config:      config,
+		metadata:    metadata,
+		status:      StatusInitializing,
+		stats: AdapterStats{
+			MaxConnections: 1, // Default to single connection
+		},
+	}
+}
+
+// Name returns the adapter name
+func (a *BaseAdapter) Name() string {
+	return a.name
+}
+
+// Type returns the adapter type
+func (a *BaseAdapter) Type() string {
+	return a.adapterType
+}
+
+// Metadata returns the adapter metadata
+func (a *BaseAdapter) Metadata() AdapterMetadata {
+	return a.metadata
+}
+
+// Config returns the adapter configuration
+func (a *BaseAdapter) Config() AdapterConfig {
+	return a.config
+}
+
+// Status returns the adapter status
+func (a *BaseAdapter) Status() AdapterStatus {
+	return a.status
+}
+
+// Stats returns the adapter statistics
+func (a *BaseAdapter) Stats() AdapterStats {
+	return a.stats
+}
+
+// Protocol returns the protocol used by the adapter
+func (a *BaseAdapter) Protocol() protocol.Protocol {
+	return a.protocol
+}
+
+// SetProtocol sets the protocol used by the adapter
+func (a *BaseAdapter) SetProtocol(protocol protocol.Protocol) {
+	a.protocol = protocol
+}
+
+// LastError returns the last error encountered by the adapter
+func (a *BaseAdapter) LastError() error {
+	return a.lastError
+}
+
+// SetMessageHandler sets the message handler for the adapter
+func (a *BaseAdapter) SetMessageHandler(handler MessageHandlerFunc) {
+	a.handler = handler
+}
+
+// updateStatus updates the adapter status
+func (a *BaseAdapter) updateStatus(status AdapterStatus) {
+	a.status = status
+}
+
+// setError sets the last error and updates status
+func (a *BaseAdapter) setError(err error) {
+	a.lastError = err
+	a.updateStatus(StatusError)
+	a.stats.Errors++
+}
+
+// incrementMessagesSent increments the messages sent counter
+func (a *BaseAdapter) incrementMessagesSent() {
+	a.stats.MessagesSent++
+	a.stats.LastActivity = time.Now()
+}
+
+// incrementMessagesReceived increments the messages received counter
+func (a *BaseAdapter) incrementMessagesReceived() {
+	a.stats.MessagesReceived++
+	a.stats.LastActivity = time.Now()
+}
+
+// recordLatency records the latency for an operation
+func (a *BaseAdapter) recordLatency(duration time.Duration) {
+	// Simple moving average for latency
+	if a.stats.AverageLatency == 0 {
+		a.stats.AverageLatency = duration
+	} else {
+		a.stats.AverageLatency = (a.stats.AverageLatency*9 + duration) / 10
+	}
+}
+
+// resetStats resets the adapter statistics
+func (a *BaseAdapter) resetStats() {
+	a.stats = AdapterStats{
+		MaxConnections: a.stats.MaxConnections,
+	}
+}
+
+// Initialize provides a default implementation of Initialize
+func (a *BaseAdapter) Initialize(ctx context.Context) error {
+	a.updateStatus(StatusInitializing)
+	// Default implementation does nothing
+	return nil
+}
+
+// Connect provides a default implementation of Connect
+func (a *BaseAdapter) Connect(ctx context.Context) error {
+	a.updateStatus(StatusConnecting)
+	// Default implementation does nothing
+	a.updateStatus(StatusConnected)
+	a.stats.ConnectedSince = time.Now()
+	return nil
+}
+
+// Disconnect provides a default implementation of Disconnect
+func (a *BaseAdapter) Disconnect(ctx context.Context) error {
+	a.updateStatus(StatusDisconnected)
+	// Default implementation does nothing
+	return nil
+}
+
+// Shutdown provides a default implementation of Shutdown
+func (a *BaseAdapter) Shutdown(ctx context.Context) error {
+	a.updateStatus(StatusStopped)
+	// Default implementation does nothing
+	return nil
+}
+
+// Send provides a default implementation of Send
+func (a *BaseAdapter) Send(ctx context.Context, message interface{}) error {
+	// Default implementation does nothing
+	a.incrementMessagesSent()
+	return nil
+}
+
+// Receive provides a default implementation of Receive
+func (a *BaseAdapter) Receive(ctx context.Context) (interface{}, error) {
+	// Default implementation does nothing
+	a.incrementMessagesReceived()
+	return nil, nil
+}
+
+
+
+

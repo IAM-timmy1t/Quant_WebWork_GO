@@ -18,7 +18,7 @@ Key Capabilities:
 3. Build Plan Integration
    - Configuration alignment
    - Feature priority mapping
-   - Resource optimization
+   - Resource optimizationr
 
 Dependencies:
     rich>=10.0.0   : Console interface and progress tracking
@@ -358,6 +358,17 @@ class ProjectAnalyzer:
                 if not root_path.exists():
                     raise ValueError(f"Path does not exist: {root_path}")
                 
+                # For Go projects, try to identify the main project directory
+                # This will help filter out external dependencies
+                if (root_path / "go.mod").exists() or any(p.name.endswith(".go") for p in root_path.glob("*.go")):
+                    logger.info("Go project detected, optimizing filters for Go dependencies")
+                    # Find the main project directory by looking for go.mod
+                    # or checking for patterns in directory structure
+                    project_dir = root_path
+                    if (root_path / "QUANT_WW_GO").exists() and (root_path / "QUANT_WW_GO").is_dir():
+                        project_dir = root_path / "QUANT_WW_GO"
+                        logger.info(f"Main project directory identified as: {project_dir}")
+                
                 # Generate tree structure
                 progress.update(self.current_task_id, advance=20)
                 tree = self._generate_tree(root_path)
@@ -385,17 +396,161 @@ class ProjectAnalyzer:
             guide_style="bold bright_blue"
         )
         
-        def add_to_tree(path: Path, tree: Tree, depth: int = 0) -> None:
+        # Set of excluded directories with commonly used dependencies and build artifacts
+        excluded_dirs = {
+            "node_modules", "dist", ".git", "__pycache__", "venv", ".idea", ".vscode",
+            "build", "vendor", ".nuxt", "bin", "obj", "pkg", "target", "out", "lib",
+            ".next", "bower_components", ".sass-cache", ".gradle", ".svn", ".hg",
+            "go.sum", "go.mod"
+        }
+        
+        # Set of excluded paths to prevent traversal into dependencies
+        excluded_path_patterns = {
+            # Go specific package dependencies (more aggressive filtering)
+            r"golang\.org", r"google\.golang\.org", r"gopkg\.in", 
+            r"github\.com(?!\/IAM-timmy1t\/Quant_WebWork_GO)", # Exclude all github.com except the project itself
+            "vendor", "third_party", "internal/pkg/mod",
+            
+            # Additional Go dependency path fragments
+            "/pkg/mod/", "/.pkg/", "/go/pkg/", 
+            
+            # Python packages
+            "dist-packages", "site-packages",
+            
+            # Node.js and binary paths
+            "node_modules", r"[\\/]bin[\\/]",
+        }
+        
+        # List of hard exclusions that should always be skipped
+        # (case-insensitive check for these strings in path)
+        hard_excluded_paths = [
+            "golang.org", 
+            "google.golang.org", 
+            "gopkg.in",
+            "github.com/stretchr",
+            "github.com/prometheus",
+            "go/src"
+        ]
+        
+        def is_excluded(path: Path) -> bool:
+            """Check if a path should be excluded from the tree.
+            
+            Args:
+                path: Path to check
+                
+            Returns:
+                True if the path should be excluded, False otherwise
+            """
+            # Check excluded directory names
+            if path.name in excluded_dirs:
+                return True
+            
+            # Convert path to string for checks
+            path_str = str(path).lower()
+            
+            # Hard exclusions - always skip these paths
+            for excl in hard_excluded_paths:
+                if excl.lower() in path_str:
+                    return True
+                
+            # Check pattern-based exclusions (dependency directories)
+            for pattern in excluded_path_patterns:
+                import re
+                if pattern.startswith(r"[") or "(" in pattern or "." in pattern:
+                    # This is a regex pattern
+                    try:
+                        if re.search(pattern, str(path), re.IGNORECASE):
+                            return True
+                    except re.error:
+                        # If regex fails, try a simple substring match
+                        if pattern.lower() in path_str:
+                            return True
+                else:
+                    # Simple substring check
+                    if pattern.lower() in path_str:
+                        return True
+            
+            # Check for Go module cache paths
+            if "go" in path_str and "mod" in path_str and "@v" in path_str:
+                return True
+            
+            # Check for files related to Go build cache
+            if path.is_file() and path.suffix.lower() in {".a", ".h", ".c", ".o"} and ("go" in path_str and "cache" in path_str):
+                return True
+                    
+            # Check for excluded file extensions
+            if path.is_file() and path.suffix.lower() not in {
+                # Go files
+                ".go", ".mod", 
+                # Web files
+                ".html", ".css", ".scss", ".js", ".jsx", ".ts", ".tsx", ".vue", 
+                # Python files
+                ".py", ".pyw", ".ipynb",
+                # Config files
+                ".json", ".yaml", ".yml", ".toml", ".ini", ".conf",
+                # Documentation files
+                ".md", ".txt", ".rst", ".pdf",
+                # Other common source files
+                ".c", ".cpp", ".h", ".hpp", ".java", ".php", ".rb", ".sh", ".sql"
+            }:
+                # Only include files with project-related extensions
+                return True
+                
+            # Skip the current exclude patterns from config as well
+            if path.name in self.config.exclude_patterns or any(exclude in str(path) for exclude in self.config.exclude_patterns):
+                return True
+            
+            # Special case for Go modules - filter out paths with @v (version specifiers)
+            if "@v" in path_str and (path_str.endswith(".mod") or path_str.endswith(".zip") or path_str.endswith(".sum")):
+                return True
+                
+            # Default: include the path
+            return False
+        
+        def add_to_tree(path: Path, parent_tree: Tree, depth: int = 0) -> None:
+            """Add directory contents to tree recursively.
+            
+            Args:
+                path: Current directory path
+                parent_tree: Parent tree node
+                depth: Current recursion depth
+            """
+            # Check depth constraint
             if self.config.max_depth != -1 and depth > self.config.max_depth:
                 return
                 
             try:
-                for item in sorted(path.iterdir()):
-                    if item.name in self.config.exclude_patterns:
+                # Get all items and sort them (directories first, then files)
+                items = []
+                try:
+                    items = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+                except PermissionError:
+                    parent_tree.add("[red][Access Denied][/]")
+                    return
+                
+                # Track whether we have any files to show
+                shown_items = 0
+                
+                for item in items:
+                    # Skip excluded items
+                    if is_excluded(item):
                         continue
                         
-                    # Create node label
+                    # Create node label with appropriate styling
                     if item.is_dir():
+                        # Check if directory contains any non-excluded items before adding
+                        has_content = False
+                        try:
+                            sub_items = list(item.iterdir())
+                            has_content = any(not is_excluded(sub_item) for sub_item in sub_items)
+                        except (PermissionError, OSError):
+                            # If we can't check contents, assume it has content
+                            has_content = True
+                            
+                        if not has_content:
+                            # Skip empty directories (after exclusions)
+                            continue
+                            
                         label = f"[bold blue]{item.name}[/]"
                         if self.config.show_metrics:
                             features = self.feature_analyzer.features.get(str(item), {})
@@ -403,18 +558,40 @@ class ProjectAnalyzer:
                                 label += (f" [dim](Features: {len(features)}, "
                                         f"Valid: {sum(1 for f in features.values() if f['validation_status'])})[/]")
                     else:
-                        label = item.name
-                        
-                    # Add node and recurse
-                    branch = tree.add(label)
+                        # File styling based on type
+                        if item.suffix.lower() in {".py", ".pyw"}:
+                            label = f"[green]{item.name}[/]"
+                        elif item.suffix.lower() in {".go"}:
+                            label = f"[cyan]{item.name}[/]"
+                        elif item.suffix.lower() in {".js", ".jsx", ".ts", ".tsx"}:
+                            label = f"[yellow]{item.name}[/]"
+                        elif item.suffix.lower() in {".html", ".htm"}:
+                            label = f"[magenta]{item.name}[/]"
+                        elif item.suffix.lower() in {".css", ".scss", ".sass"}:
+                            label = f"[blue]{item.name}[/]"
+                        elif item.suffix.lower() in {".json", ".yaml", ".yml", ".toml", ".ini"}:
+                            label = f"[yellow]{item.name}[/]"
+                        elif item.suffix.lower() in {".md", ".txt", ".rst"}:
+                            label = f"[cyan]{item.name}[/]"
+                        else:
+                            label = f"{item.name}"
+                    
+                    # Add node to tree
+                    branch = parent_tree.add(label)
+                    shown_items += 1
+                    
+                    # Recursively process directories
                     if item.is_dir():
                         add_to_tree(item, branch, depth + 1)
                         
-            except PermissionError:
-                tree.add("[red][Access Denied][/]")
+                # Add indicator for too many items
+                if not shown_items and depth > 0:
+                    parent_tree.add("[dim][empty or all items excluded][/]")
+                    
             except Exception as e:
                 logger.warning(f"Error processing {path}: {e}")
                 
+        # Start recursive process
         add_to_tree(root_path, tree)
         return tree
 
