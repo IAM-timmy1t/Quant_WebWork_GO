@@ -1,0 +1,114 @@
+groups:
+- name: system_alerts
+  rules:
+  - alert: HighCpuUsage
+    expr: system_cpu_usage_percent > 80 for 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High CPU usage detected"
+      description: "CPU usage is above 80% for 5 minutes on {{ $labels.instance }}"
+
+  - alert: HighMemoryUsage
+    expr: system_memory_usage_percent > 85 for 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High memory usage detected"
+      description: "Memory usage is above 85% for 5 minutes on {{ $labels.instance }}"
+
+  - alert: DiskSpaceRunningOut
+    expr: system_disk_usage_percent{path="/"} > 90
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Low disk space"
+      description: "Disk usage is above 90% for 10 minutes on {{ $labels.instance }} at {{ $labels.path }}"
+      
+  - alert: DiskSpaceCritical
+    expr: system_disk_usage_percent{path="/"} > 95
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Critical disk space"
+      description: "Disk usage is above 95% for 5 minutes on {{ $labels.instance }} at {{ $labels.path }}"
+
+- name: application_alerts
+  rules:
+  - alert: HighErrorRate
+    expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.05
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High HTTP error rate"
+      description: "Error rate is above 5% for 2 minutes on {{ $labels.instance }}"
+      
+  - alert: ServiceDown
+    expr: up == 0
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Service is down"
+      description: "{{ $labels.job }} service on {{ $labels.instance }} is down"
+
+  - alert: SlowEndpoint
+    expr: http_request_duration_seconds{quantile="0.9"} > 1
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Slow API endpoint detected"
+      description: "Endpoint {{ $labels.path }} on {{ $labels.instance }} has p90 latency above 1s for 5 minutes"
+
+- name: bridge_alerts
+  rules:
+  - alert: BridgeHighErrorRate
+    expr: rate(bridge_requests_total{status="error"}[5m]) / rate(bridge_requests_total[5m]) > 0.05
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High bridge error rate"
+      description: "Bridge error rate is above 5% for 2 minutes (protocol: {{ $labels.protocol }}, service: {{ $labels.service }})"
+      
+  - alert: BridgeHighLatency
+    expr: bridge_request_duration_seconds{quantile="0.9"} > 2
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Slow bridge response time"
+      description: "Bridge p90 response time is above 2s for 5 minutes (protocol: {{ $labels.protocol }}, service: {{ $labels.service }})"
+      
+  - alert: TooManyConnections
+    expr: bridge_connections > 100
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High number of bridge connections"
+      description: "There are more than 100 active bridge connections for 5 minutes (protocol: {{ $labels.protocol }}, service: {{ $labels.service }})"
+
+- name: security_alerts
+  rules:
+  - alert: TooManyFailedLogins
+    expr: rate(login_failures_total[5m]) > 10
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Possible brute force attack"
+      description: "More than 10 failed login attempts per minute for 5 minutes"
+      
+  - alert: UnauthorizedAccessAttempts
+    expr: rate(unauthorized_access_attempts_total[5m]) > 5
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Unauthorized access attempts"
+      description: "More than 5 unauthorized access attempts per minute for 5 minutes"

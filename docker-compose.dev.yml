@@ -1,0 +1,198 @@
+version: '3.8'
+
+services:
+  bridge-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: quant-webworks-go:dev
+    container_name: quant-webworks-bridge-dev
+    ports:
+      - "8080:8080"
+      - "2345:2345"  # For delve debugger
+    environment:
+      - PORT=8080
+      - ENABLE_WEB=true
+      - CORS_ORIGINS=http://localhost:3000,http://frontend-dev:3000
+      - LOG_LEVEL=debug
+      - METRICS_ENABLED=true
+      - ENABLE_IP_MASKING=true
+      - QUANT_ENV=development
+      - GO_ENV=development
+      - CONFIG_PATH=/app/config/dev
+    volumes:
+      - .:/app:delegated  # Mount entire project for hot reloading
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - go-modules:/go/pkg/mod  # Cache Go modules
+    networks:
+      - quant-network-dev
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    # Use air for hot reloading in development
+    command: air -c .air.toml
+    restart: unless-stopped
+
+  frontend-dev:
+    image: node:18-alpine
+    container_name: quant-webworks-frontend-dev
+    working_dir: /app
+    command: sh -c "npm install && npm start"
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - REACT_APP_SERVER_URL=http://localhost:8080
+      - CHOKIDAR_USEPOLLING=true
+    volumes:
+      - ./client:/app:delegated
+      - node-modules:/app/node_modules  # Cache node modules
+    networks:
+      - quant-network-dev
+    depends_on:
+      - bridge-server
+
+  # Database for development
+  postgres:
+    image: postgres:16-alpine
+    container_name: quant-webworks-db-dev
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=quant
+      - POSTGRES_PASSWORD=development
+      - POSTGRES_DB=quant_webwork
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - quant-network-dev
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quant"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching and session management
+  redis:
+    image: redis:alpine
+    container_name: quant-webworks-redis-dev
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - quant-network-dev
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Development tools
+  prometheus-dev:
+    image: prom/prometheus:latest
+    container_name: quant-webworks-prometheus-dev
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./deployments/monitoring/prometheus:/etc/prometheus
+      - prometheus-dev-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    networks:
+      - quant-network-dev
+    depends_on:
+      - bridge-server
+      - alertmanager-dev
+
+  grafana-dev:
+    image: grafana/grafana:latest
+    container_name: quant-webworks-grafana-dev
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_DOMAIN=localhost
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Editor
+    volumes:
+      - ./deployments/monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - grafana-dev-data:/var/lib/grafana
+    restart: unless-stopped
+    networks:
+      - quant-network-dev
+    depends_on:
+      - prometheus-dev
+
+  # AlertManager for alert notifications
+  alertmanager-dev:
+    image: prom/alertmanager:latest
+    container_name: quant-webworks-alertmanager-dev
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./deployments/monitoring/alertmanager:/etc/alertmanager
+      - alertmanager-dev-data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    restart: unless-stopped
+    networks:
+      - quant-network-dev
+
+  # Node exporter for system metrics
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: quant-webworks-node-exporter
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc|rootfs/var/lib/docker/containers|rootfs/var/lib/docker/overlay2|rootfs/run/docker/netns|rootfs/var/lib/docker/aufs)($$|/)'
+    restart: unless-stopped
+    networks:
+      - quant-network-dev
+
+  # Test helper services
+  mockserver:
+    image: mockserver/mockserver:latest
+    container_name: quant-webworks-mockserver
+    ports:
+      - "1080:1080"
+    environment:
+      - MOCKSERVER_INITIALIZATION_JSON_PATH=/config/mockserver.json
+      - MOCKSERVER_WATCH_INITIALIZATION_JSON=true
+    volumes:
+      - ./tests/mocks:/config
+    networks:
+      - quant-network-dev
+
+networks:
+  quant-network-dev:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  go-modules:
+  node-modules:
+  prometheus-dev-data:
+  grafana-dev-data:
+  alertmanager-dev-data:

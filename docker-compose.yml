@@ -15,11 +15,18 @@ services:
       - CORS_ORIGINS=http://localhost:3000,http://frontend:3000
       - LOG_LEVEL=info
       - METRICS_ENABLED=true
+      # Security-related environment variables
+      - ENABLE_IP_MASKING=true
+      - TOKEN_VALIDATION_LEVEL=strict
+      - RATE_LIMIT_ENABLED=true
+      - RATE_LIMIT_REQUESTS=100
+      - RATE_LIMIT_WINDOW=60
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
     networks:
-      - quant-network
+      quant-network:
+        ipv4_address: 172.28.1.2
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 30s
@@ -27,6 +34,15 @@ services:
       retries: 3
       start_period: 5s
     restart: unless-stopped
+    # Add security options
+    security_opt:
+      - no-new-privileges:true
+    # Add resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
 
   frontend-dev:
     image: node:18-alpine
@@ -42,9 +58,18 @@ services:
     volumes:
       - ./client:/app
     networks:
-      - quant-network
+      quant-network:
+        ipv4_address: 172.28.1.3
     depends_on:
       - bridge-server
+    # Add security options
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
 
   prometheus:
     image: prom/prometheus:latest
@@ -61,10 +86,20 @@ services:
       - '--web.enable-lifecycle'
     restart: unless-stopped
     networks:
-      - quant-network
+      quant-network:
+        ipv4_address: 172.28.1.4
     depends_on:
       - bridge-server
       - frontend-dev
+    # Add security options
+    security_opt:
+      - no-new-privileges:true
+    user: "65534:65534" # Run as non-root (nobody)
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
 
   grafana:
     image: grafana/grafana:latest
@@ -82,13 +117,36 @@ services:
       - grafana-data:/var/lib/grafana
     restart: unless-stopped
     networks:
-      - quant-network
+      quant-network:
+        ipv4_address: 172.28.1.5
     depends_on:
       - prometheus
+    # Add security options
+    security_opt:
+      - no-new-privileges:true
+    user: "472:472" # Run as grafana user
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
 
 networks:
   quant-network:
     driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16
+          gateway: 172.28.0.1
+    # Enhanced network security
+    driver_opts:
+      com.docker.network.bridge.name: quant-net
+      com.docker.network.driver.mtu: 1450
+      # Disable inter-container communication by default
+      com.docker.network.bridge.enable_icc: "false"
+      # Enable IP masquerading
+      com.docker.network.bridge.enable_ip_masquerade: "true"
 
 volumes:
   prometheus-data:

@@ -1,0 +1,49 @@
+# Development Dockerfile for Quant WebWorks GO
+FROM golang:1.21-alpine
+
+# Install development dependencies
+RUN apk add --no-cache git gcc musl-dev curl wget bash vim procps shadow tzdata nano
+
+# Install Air for hot reloading
+RUN go install github.com/cosmtrek/air@latest
+
+# Install delve for debugging
+RUN go install github.com/go-delve/delve/cmd/dlv@latest
+
+# Set working directory
+WORKDIR /app
+
+# Set environment variables
+ENV GO111MODULE=on \
+    CGO_ENABLED=0 \
+    GOOS=linux \
+    GOARCH=amd64 \
+    GOPRIVATE=github.com/IAM-timmy1t/Quant_WebWork_GO \
+    GO_ENV=development
+
+# Create a non-root user to run the application in development
+RUN useradd -m -s /bin/bash -u 1000 developer && \
+    chown -R developer:developer /app
+
+# Create necessary directories with proper permissions
+RUN mkdir -p /app/data /app/logs && \
+    chown -R developer:developer /app/data /app/logs
+
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy the air config file
+COPY .air.toml ./
+
+# Switch to non-root user
+USER developer
+
+# Expose ports
+EXPOSE 8080
+EXPOSE 2345
+
+# Command for container
+CMD ["air", "-c", ".air.toml"]

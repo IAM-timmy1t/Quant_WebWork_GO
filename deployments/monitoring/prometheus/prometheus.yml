@@ -7,11 +7,11 @@ alerting:
   alertmanagers:
     - static_configs:
         - targets:
-          # - alertmanager:9093
+            - alertmanager-dev:9093
 
 # Load rules once and periodically evaluate them
 rule_files:
-  # - "first_rules.yml"
+  - "alert_rules.yml"
   # - "second_rules.yml"
 
 # A scrape configuration containing endpoints to scrape
@@ -21,17 +21,20 @@ scrape_configs:
       - targets: ["localhost:9090"]
 
   - job_name: "bridge-server"
-    scrape_interval: 10s
     metrics_path: "/metrics"
     static_configs:
       - targets: ["bridge-server:8080"]
     
-  - job_name: "frontend-metrics"
-    scrape_interval: 10s
-    metrics_path: "/metrics"
-    static_configs:
-      - targets: ["frontend-dev:3000"]
-
   - job_name: "node-exporter"
     static_configs:
       - targets: ["node-exporter:9100"]
+
+  # Database monitoring
+  - job_name: "postgres"
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  # Redis monitoring
+  - job_name: "redis"
+    static_configs:
+      - targets: ["redis-exporter:9121"]

@@ -184,7 +184,7 @@ jobs:
           files: unit.out,integration.out
           flags: unittests,integrationtests
           name: codecov-go
-          token: ${{ secrets.CODECOV_TOKEN || '' }}
+          token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
   frontend-checks:
@@ -250,10 +250,10 @@ jobs:
           start: npm run start:ci
           wait-on: 'http://localhost:3000'
           browser: chrome
-          record: ${{ secrets.CYPRESS_RECORD_KEY != '' }}
+          record: ${{ secrets.CYPRESS_RECORD_KEY }}
           parallel: true
         env:
-          CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY || '' }}
+          CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload coverage reports
@@ -261,7 +261,7 @@ jobs:
         with:
           directory: ./client/coverage
           flags: frontend
-          token: ${{ secrets.CODECOV_TOKEN || '' }}
+          token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
   build:
@@ -381,7 +381,7 @@ jobs:
         if: github.ref == 'refs/heads/main' || github.event.inputs.environment == 'production'
         uses: azure/k8s-set-context@v3
         with:
-          kubeconfig: ${{ secrets.KUBE_CONFIG_PROD || '' }}
+          kubeconfig: ${{ secrets.KUBE_CONFIG_PROD }}
           
       - name: Deploy to Kubernetes (Production)
         if: github.ref == 'refs/heads/main' || github.event.inputs.environment == 'production'
@@ -390,7 +390,7 @@ jobs:
           namespace: quantwebworks-prod
           manifests: ./deployments/k8s/prod/*
           images: |
-            ${{ needs.build.outputs.image-tag }}
+            ${{ needs.build.outputs.image }}
           kubectl-version: latest
           strategy: canary
           action: deploy
@@ -400,12 +400,12 @@ jobs:
         if: github.ref == 'refs/heads/develop' || github.event.inputs.environment == 'staging'
         uses: appleboy/ssh-action@v1.0.0
         with:
-          host: ${{ secrets.STAGING_HOST || '' }}
-          username: ${{ secrets.STAGING_USERNAME || '' }}
-          key: ${{ secrets.SSH_PRIVATE_KEY || '' }}
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             cd /opt/quantwebworks
-            echo "IMAGE=${{ needs.build.outputs.image-tag }}" > .env
+            echo "IMAGE=${{ needs.build.outputs.image }}" > .env
             echo "VERSION=${{ needs.build.outputs.version }}" >> .env
             docker compose -f docker-compose.staging.yml pull
             docker compose -f docker-compose.staging.yml up -d --force-recreate
@@ -448,5 +448,5 @@ jobs:
               ]
             }
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL || '' }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

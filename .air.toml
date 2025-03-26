@@ -1,0 +1,43 @@
+# Air configuration for hot reloading
+# https://github.com/cosmtrek/air
+
+root = "."
+tmp_dir = "tmp"
+
+[build]
+# Just plain old shell command. You could use `make` as well.
+cmd = "go build -gcflags='all=-N -l' -o ./tmp/main ./cmd/server"
+# Binary file yields from `cmd`.
+bin = "tmp/main"
+# This log file places in your tmp_dir.
+log = "air.log"
+# Watch these filename extensions.
+include_ext = ["go", "yaml", "yml", "toml", "json"]
+# Ignore these filename extensions or directories.
+exclude_dir = ["client", "web", "node_modules", "vendor", "tmp", ".git", "data", "logs", "deployments"]
+# Exclude files/directories that match these patterns.
+exclude_regex = ["_test.go", ".*_templ.go"]
+# Exclude unchanged files.
+exclude_unchanged = true
+# Follow symlink for directories
+follow_symlink = true
+# This log file places in your tmp_dir.
+build_log = "air_errors.log"
+
+[log]
+# Show log time.
+time = true
+
+[color]
+# Customize each part's color.
+main = "magenta"
+watcher = "cyan"
+build = "yellow"
+runner = "green"
+
+[misc]
+# Delete tmp directory on exit.
+clean_on_exit = true
+
+[screen]
+clear_on_rebuild = true
