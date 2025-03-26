@@ -34,10 +34,10 @@ func getProjectStructure() []FileSpec {
 				"os/signal",
 				"syscall",
 				"time",
-				"github.com/yourusername/QUANT_WebWork_GO/internal/core/config",
-				"github.com/yourusername/QUANT_WebWork_GO/internal/api/rest",
-				"github.com/yourusername/QUANT_WebWork_GO/internal/core/metrics",
-				"github.com/yourusername/QUANT_WebWork_GO/internal/security",
+				"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/config",
+				"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/api/rest",
+				"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/metrics",
+				"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/security",
 			},
 			RequiredPatterns: []string{
 				"func main()",
@@ -79,8 +79,8 @@ func getProjectStructure() []FileSpec {
 			RequiredImports: []string{
 				"net/http",
 				"github.com/gorilla/mux",
-				"github.com/yourusername/QUANT_WebWork_GO/internal/core/config",
-				"github.com/yourusername/QUANT_WebWork_GO/internal/core/metrics",
+				"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/config",
+				"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/metrics",
 			},
 			RequiredPatterns: []string{
 				"func NewRouter",
@@ -91,7 +91,7 @@ func getProjectStructure() []FileSpec {
 			RequiredImports: []string{
 				"net/http",
 				"time",
-				"github.com/yourusername/QUANT_WebWork_GO/internal/core/metrics",
+				"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/metrics",
 				"go.uber.org/zap",
 			},
 			RequiredPatterns: []string{
@@ -135,7 +135,7 @@ func getProjectStructure() []FileSpec {
 			RequiredImports: []string{
 				"context",
 				"errors",
-				"github.com/yourusername/QUANT_WebWork_GO/internal/core/metrics",
+				"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/metrics",
 				"go.uber.org/zap",
 			},
 			RequiredPatterns: []string{
@@ -151,9 +151,9 @@ func getProjectStructure() []FileSpec {
 				"context",
 				"fmt",
 				"sync",
-				"github.com/yourusername/QUANT_WebWork_GO/internal/bridge/adapters",
-				"github.com/yourusername/QUANT_WebWork_GO/internal/core/discovery",
-				"github.com/yourusername/QUANT_WebWork_GO/internal/core/metrics",
+				"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/bridge/adapters",
+				"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/discovery",
+				"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/metrics",
 			},
 			RequiredPatterns: []string{
 				"type Manager struct",
@@ -210,7 +210,7 @@ func getProjectStructure() []FileSpec {
 				"fmt",
 				"sync",
 				"time",
-				"github.com/yourusername/QUANT_WebWork_GO/internal/bridge/adapters",
+				"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/bridge/adapters",
 			},
 			RequiredPatterns: []string{
 				"type ConnectionPool struct",
@@ -225,7 +225,7 @@ func getProjectStructure() []FileSpec {
 			RequiredImports: []string{
 				"context",
 				"time",
-				"github.com/yourusername/QUANT_WebWork_GO/internal/core/config",
+				"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/config",
 			},
 			RequiredPatterns: []string{
 				"type Service struct",
@@ -287,7 +287,7 @@ func getProjectStructure() []FileSpec {
 				"sync",
 				"time",
 				"golang.org/x/time/rate",
-				"github.com/yourusername/QUANT_WebWork_GO/internal/core/metrics",
+				"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/metrics",
 			},
 			RequiredPatterns: []string{
 				"type AdvancedRateLimiter struct",
@@ -329,7 +329,7 @@ func getProjectStructure() []FileSpec {
 			RequiredImports: []string{
 				"time",
 				"github.com/prometheus/client_golang/prometheus",
-				"github.com/yourusername/QUANT_WebWork_GO/internal/core/config",
+				"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/config",
 				"go.uber.org/zap",
 			},
 			RequiredPatterns: []string{
@@ -417,8 +417,8 @@ func getProjectStructure() []FileSpec {
 				"fmt",
 				"os",
 				"time",
-				"github.com/yourusername/QUANT_WebWork_GO/internal/bridge",
-				"github.com/yourusername/QUANT_WebWork_GO/internal/bridge/adapters",
+				"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/bridge",
+				"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/bridge/adapters",
 			},
 			RequiredPatterns: []string{
 				"type TestResult struct",
