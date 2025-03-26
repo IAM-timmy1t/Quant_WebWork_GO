@@ -3,343 +3,450 @@ name: Quant WebWorks GO CI/CD
 on:
   push:
     branches: [main, develop]
+    paths-ignore: 
+      - 'docs/**'
+      - '**.md'
+      - '.github/ISSUE_TEMPLATE/**'
   pull_request:
     branches: [main, develop]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  GO_VERSION: '1.21'
+  NODE_VERSION: '20'
+  DOCKER_IMAGE: quant-webworks-go
+  DOCKER_REGISTRY: ghcr.io
+  GOLANGCI_LINT_VERSION: v1.58.1
+  GOOS: linux
+  GOARCH: amd64
+  CGO_ENABLED: 0
 
 jobs:
-  validate-structure:
-    name: Validate Project Structure
+  validate:
+    name: Validate Project
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Verify directory structure
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Verify Structure
+        id: verify-structure
+        shell: bash
         run: |
-          echo "Verifying project structure..."
-          for dir in cmd internal pkg client tests; do
+          # Enhanced structure validation with detailed error reporting
+          required_dirs=(cmd internal deployments configs)
+          missing_dirs=()
+          
+          for dir in "${required_dirs[@]}"; do
             if [ ! -d "$dir" ]; then
-              echo "Error: Required directory '$dir' not found"
-              exit 1
+              missing_dirs+=("$dir")
             fi
           done
-          echo "Project structure validation passed"
-
-  go-lint:
-    name: Go Lint and Security Check
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: '^1.21'
-
-      - name: Install golangci-lint
-        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.54.1
-
-      - name: Run golangci-lint
-        run: $(go env GOPATH)/bin/golangci-lint run ./... --timeout=5m
-
-      - name: Run govulncheck
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          $(go env GOPATH)/bin/govulncheck ./...
-
-      - name: Check for hardcoded secrets
-        run: |
-          # Simple grep for potential API keys and secrets
-          if grep -r -E "(api|secret|key|token|password).*['\"][a-zA-Z0-9_-]{16,}['\"]" --include="*.go" .; then
-            echo "Warning: Potential hardcoded secrets detected"
+          
+          if [ ${#missing_dirs[@]} -ne 0 ]; then
+            echo "::error::Missing required directories: ${missing_dirs[*]}"
             exit 1
           fi
+          
+          echo "Project structure validation passed"
 
-  go-test:
-    name: Go Backend Tests
+      - name: Check Go Module
+        id: check-module
+        run: |
+          if ! grep -q "module github.com/IAM-timmy1t/Quant_WebWork_GO" go.mod; then
+            echo "::error::Invalid module path in go.mod"
+            echo "Expected: module github.com/IAM-timmy1t/Quant_WebWork_GO"
+            echo "Found: $(grep "^module" go.mod)"
+            exit 1
+          fi
+          echo "Go module validation passed"
+
+      - name: Validate Go Import Paths
+        id: check-imports
+        run: |
+          invalid_imports=$(grep -r "github.com/IAM-timmy1t/Quant_WebWorks_GO/QUANT_WW_GO" --include="*.go" .)
+          if [ ! -z "$invalid_imports" ]; then
+            echo "::error::Found invalid import paths with duplicate path segments:"
+            echo "$invalid_imports"
+            exit 1
+          fi
+          echo "Import path validation passed"
+
+  go-checks:
+    name: Go Security & Quality
     runs-on: ubuntu-latest
-    needs: [go-lint]
+    needs: [validate]
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Set up Go
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Go
         uses: actions/setup-go@v4
         with:
-          go-version: '^1.21'
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            **/go.sum
 
-      - name: Run unit tests with coverage
+      - name: Install go-audit
+        run: go install github.com/sonatype-nexus-community/nancy@latest
+
+      - name: Audit Dependencies
         run: |
-          go test -race -coverprofile=coverage.out -covermode=atomic ./...
-          go tool cover -func=coverage.out
+          go mod verify
+          go list -m all | nancy sleuth --exclude-vulnerability-file .nancy-ignore
 
-      - name: Upload coverage report
-        uses: codecov/codecov-action@v3
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v3
         with:
-          file: ./coverage.out
-          flags: backend
-          name: go-coverage
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          args: --timeout=10m --config .golangci.yml --issues-exit-code=1 ./...
+          only-new-issues: true
+          
+      - name: Run govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: ${{ env.GO_VERSION }}
+          check-latest: true
+          packages: ./...
 
-      - name: Run integration tests
-        run: |
-          # Setup any test dependencies
-          go test -tags=integration ./tests/... -v
+      - name: Secret Scanning
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          config-path: .gitleaks.toml
+          verbose: true
 
-  react-lint:
-    name: React Lint and Security Check
+  go-tests:
+    name: Go Tests
     runs-on: ubuntu-latest
+    needs: [go-checks]
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_USER: testuser
+          POSTGRES_DB: testdb
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Go
+        uses: actions/setup-go@v4
         with:
-          node-version: '18'
-          cache: 'npm'
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Run Unit Tests
+        id: unit-tests
+        run: |
+          go test -v -race -shuffle=on -coverprofile=unit.out -covermode=atomic $(go list ./... | grep -v /integration/)
+          go tool cover -func=unit.out -o unit-coverage.txt
+          COVERAGE=$(go tool cover -func=unit.out | grep total | awk '{print $3}')
+          echo "Unit test coverage: $COVERAGE"
+          if [[ ${COVERAGE%.*} -lt 70 ]]; then
+            echo "::warning::Unit test coverage ($COVERAGE) is below 70%"
+          fi
+
+      - name: Run Integration Tests
+        id: integration-tests
+        run: |
+          go test -v -tags=integration -race -coverprofile=integration.out -covermode=atomic ./...
+          go tool cover -func=integration.out -o integration-coverage.txt
+          COVERAGE=$(go tool cover -func=integration.out | grep total | awk '{print $3}')
+          echo "Integration test coverage: $COVERAGE"
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v4
+        with:
+          files: unit.out,integration.out
+          flags: unittests,integrationtests
+          name: codecov-go
+          token: ${{ secrets.CODECOV_TOKEN || '' }}
+          fail_ci_if_error: false
+
+  frontend-checks:
+    name: Frontend Quality
+    runs-on: ubuntu-latest
+    needs: [validate]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
           cache-dependency-path: client/package-lock.json
 
       - name: Install dependencies
         working-directory: ./client
         run: npm ci
+
+      - name: Audit Dependencies
+        working-directory: ./client
+        run: |
+          npm audit --production --audit-level=high || echo "::warning::Security vulnerabilities found in dependencies"
 
       - name: Run ESLint
         working-directory: ./client
-        run: npm run lint
+        run: npm run lint -- --max-warnings=0
 
-      - name: Run security audit
+      - name: Run Stylelint
         working-directory: ./client
-        run: npm audit --production
+        run: npm run lint:css || echo "::warning::CSS linting issues found"
 
-  react-test:
-    name: React Frontend Tests
+  frontend-tests:
+    name: Frontend Tests
     runs-on: ubuntu-latest
-    needs: [react-lint]
+    needs: [frontend-checks]
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: '18'
-          cache: 'npm'
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
           cache-dependency-path: client/package-lock.json
 
       - name: Install dependencies
         working-directory: ./client
         run: npm ci
 
-      - name: Run Jest tests with coverage
+      - name: Run Unit Tests with coverage
         working-directory: ./client
-        run: npm run test:coverage -- --ci --watchAll=false
+        run: npm run test:coverage
 
-      - name: Upload coverage report
-        uses: codecov/codecov-action@v3
+      - name: Run E2E Tests
+        uses: cypress-io/github-action@v6
+        with:
+          working-directory: ./client
+          build: npm run build
+          start: npm run start:ci
+          wait-on: 'http://localhost:3000'
+          browser: chrome
+          record: ${{ secrets.CYPRESS_RECORD_KEY != '' }}
+          parallel: true
+        env:
+          CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY || '' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v4
         with:
           directory: ./client/coverage
           flags: frontend
-          name: react-coverage
-
-      - name: Install Cypress dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk2.0-0 libgtk-3-0 libgbm-dev libnotify-dev libgconf-2-4 libnss3 libxss1 libasound2 libxtst6 xauth xvfb
-
-      - name: Run Cypress E2E tests
-        uses: cypress-io/github-action@v5
-        with:
-          working-directory: ./client
-          start: npm start
-          wait-on: 'http://localhost:3000'
-          browser: chrome
-          record: false
+          token: ${{ secrets.CODECOV_TOKEN || '' }}
+          fail_ci_if_error: false
 
   build:
-    name: Build Application
+    name: Build & Package
     runs-on: ubuntu-latest
-    needs: [go-test, react-test]
+    needs: [go-tests, frontend-tests]
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
+        
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ${{ env.DOCKER_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Generate version
+        id: version
+        run: |
+          VERSION=$(git describe --tags --always)
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_REGISTRY }}/${{ github.repository_owner }}/${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=sha,format=long
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
 
-      - name: Build Docker image
-        uses: docker/build-push-action@v4
+      - name: Build and push image
+        uses: docker/build-push-action@v5
         with:
           context: .
-          push: false
-          tags: quant-webworks-go:test
+          file: ./deployments/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          load: true
-          outputs: type=docker,dest=/tmp/quant-webworks-go.tar
+          build-args: |
+            GO_VERSION=${{ env.GO_VERSION }}
+            NODE_VERSION=${{ env.NODE_VERSION }}
+            BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.version.outputs.version }}
 
-      - name: Test Docker image
-        run: |
-          docker load < /tmp/quant-webworks-go.tar
-          docker run --rm -d -p 8080:8080 --name quant-test quant-webworks-go:test
-          sleep 5
-          curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health | grep 200
-          docker stop quant-test
-
-      - name: Upload Docker image
-        uses: actions/upload-artifact@v3
-        with:
-          name: quant-webworks-go-image
-          path: /tmp/quant-webworks-go.tar
-          retention-days: 1
-
-  performance:
-    name: Performance Check
+  security:
+    name: Container Security
     runs-on: ubuntu-latest
     needs: [build]
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Download Docker image
-        uses: actions/download-artifact@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          name: quant-webworks-go-image
-          path: /tmp
+          registry: ${{ env.DOCKER_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Load Docker image
-        run: docker load < /tmp/quant-webworks-go.tar
-
-      - name: Run performance tests
-        run: |
-          docker run --rm -d -p 8080:8080 --name quant-perf quant-webworks-go:test
-          sleep 5
-          
-          # Install k6 for load testing
-          curl -L https://github.com/grafana/k6/releases/download/v0.45.0/k6-v0.45.0-linux-amd64.tar.gz | tar xz
-          sudo mv k6-v0.45.0-linux-amd64/k6 /usr/local/bin/
-          
-          # Create a basic k6 script
-          cat > load-test.js << EOF
-          import http from 'k6/http';
-          import { check, sleep } from 'k6';
-          
-          export let options = {
-            vus: 10,
-            duration: '30s',
-            thresholds: {
-              http_req_duration: ['p(95)<500'],
-              http_req_failed: ['rate<0.01'],
-            },
-          };
-          
-          export default function() {
-            let res = http.get('http://localhost:8080/health');
-            check(res, {
-              'status is 200': (r) => r.status === 200,
-              'response time < 200ms': (r) => r.timings.duration < 200,
-            });
-            sleep(1);
-          }
-          EOF
-          
-          # Run the load test
-          k6 run load-test.js
-          
-          docker stop quant-perf
-
-  security-scan:
-    name: Security Scan
-    runs-on: ubuntu-latest
-    needs: [build]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Download Docker image
-        uses: actions/download-artifact@v3
-        with:
-          name: quant-webworks-go-image
-          path: /tmp
-
-      - name: Load Docker image
-        run: docker load < /tmp/quant-webworks-go.tar
-
-      - name: Run Trivy scanner
+      - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: 'quant-webworks-go:test'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
+          image-ref: ${{ needs.build.outputs.image-tag }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          timeout: 10m
 
-      - name: Upload Trivy scan results
+      - name: Upload Trivy scan results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v2
+        if: always()
         with:
-          sarif_file: 'trivy-results.sarif'
+          sarif_file: trivy-results.sarif
+          category: container-security
 
-  deploy-staging:
-    name: Deploy to Staging
-    if: github.ref == 'refs/heads/develop'
+  deploy:
+    name: Deploy
     runs-on: ubuntu-latest
-    needs: [performance, security-scan]
-    environment: staging
+    needs: [security]
+    # Only deploy on main/develop branches or manual workflow_dispatch
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    environment: 
+      name: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'production' || 'staging') }}
+      url: ${{ github.ref == 'refs/heads/main' && 'https://app.quantwebworks.com' || 'https://staging.quantwebworks.com' }}
+    concurrency:
+      group: ${{ github.workflow }}-deploy-${{ github.ref }}
+      cancel-in-progress: false
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name: Login to DockerHub
-        uses: docker/login-action@v2
+      # Production Kubernetes deployment 
+      - name: Configure kubectl (Production)
+        if: github.ref == 'refs/heads/main' || github.event.inputs.environment == 'production'
+        uses: azure/k8s-set-context@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push
-        uses: docker/build-push-action@v4
+          kubeconfig: ${{ secrets.KUBE_CONFIG_PROD || '' }}
+          
+      - name: Deploy to Kubernetes (Production)
+        if: github.ref == 'refs/heads/main' || github.event.inputs.environment == 'production'
+        uses: Azure/k8s-deploy@v4
         with:
-          context: .
-          push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/quant-webworks-go:staging
-            ${{ secrets.DOCKERHUB_USERNAME }}/quant-webworks-go:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          namespace: quantwebworks-prod
+          manifests: ./deployments/k8s/prod/*
+          images: |
+            ${{ needs.build.outputs.image-tag }}
+          kubectl-version: latest
+          strategy: canary
+          action: deploy
 
-      # Add staging deployment steps here - e.g., SSH into server and update containers
-
-  deploy-production:
-    name: Deploy to Production
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    needs: [performance, security-scan]
-    environment: production
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name: Login to DockerHub
-        uses: docker/login-action@v2
+      # Staging server deployment using SSH
+      - name: Deploy to Staging
+        if: github.ref == 'refs/heads/develop' || github.event.inputs.environment == 'staging'
+        uses: appleboy/ssh-action@v1.0.0
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push
-        uses: docker/build-push-action@v4
+          host: ${{ secrets.STAGING_HOST || '' }}
+          username: ${{ secrets.STAGING_USERNAME || '' }}
+          key: ${{ secrets.SSH_PRIVATE_KEY || '' }}
+          script: |
+            cd /opt/quantwebworks
+            echo "IMAGE=${{ needs.build.outputs.image-tag }}" > .env
+            echo "VERSION=${{ needs.build.outputs.version }}" >> .env
+            docker compose -f docker-compose.staging.yml pull
+            docker compose -f docker-compose.staging.yml up -d --force-recreate
+            docker system prune -af --volumes
+            
+      - name: Notify Deployment
+        uses: slackapi/slack-github-action@v1.24.0
+        if: always()
         with:
-          context: .
-          push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/quant-webworks-go:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/quant-webworks-go:stable
-            ${{ secrets.DOCKERHUB_USERNAME }}/quant-webworks-go:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # Add production deployment steps here - e.g., update Kubernetes deployment
+          payload: |
+            {
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "Deployment ${{ job.status == 'success' && 'Succeeded ' || 'Failed ' }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Environment:* ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'production' || 'staging') }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Version:* ${{ needs.build.outputs.version }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL || '' }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

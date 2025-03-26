@@ -332,3 +332,97 @@ func (pb *PrometheusBridge) UnregisterFromPrometheus() {
 		prometheus.Unregister(collector)
 	}
 }
+
+// Custom metric types for bridge-related metrics
+
+// BridgeRequestCounter counts bridge requests
+type BridgeRequestCounter struct {
+	counter *prometheus.CounterVec
+}
+
+// NewBridgeRequestCounter creates a new bridge request counter
+func NewBridgeRequestCounter() *BridgeRequestCounter {
+	counter := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bridge_requests_total",
+			Help: "Total number of bridge requests",
+		},
+		[]string{"protocol", "service", "status"},
+	)
+	
+	prometheus.MustRegister(counter)
+	
+	return &BridgeRequestCounter{
+		counter: counter,
+	}
+}
+
+// Inc increments the counter for a specific protocol, service, and status
+func (c *BridgeRequestCounter) Inc(protocol, service, status string) {
+	c.counter.WithLabelValues(protocol, service, status).Inc()
+}
+
+// BridgeLatencyHistogram measures bridge request latency
+type BridgeLatencyHistogram struct {
+	histogram *prometheus.HistogramVec
+}
+
+// NewBridgeLatencyHistogram creates a new bridge latency histogram
+func NewBridgeLatencyHistogram() *BridgeLatencyHistogram {
+	histogram := prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "bridge_request_duration_seconds",
+			Help:    "Bridge request latency in seconds",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"protocol", "service"},
+	)
+	
+	prometheus.MustRegister(histogram)
+	
+	return &BridgeLatencyHistogram{
+		histogram: histogram,
+	}
+}
+
+// Observe records a latency observation for a specific protocol and service
+func (h *BridgeLatencyHistogram) Observe(protocol, service string, duration float64) {
+	h.histogram.WithLabelValues(protocol, service).Observe(duration)
+}
+
+// BridgeConnectionGauge tracks active bridge connections
+type BridgeConnectionGauge struct {
+	gauge *prometheus.GaugeVec
+}
+
+// NewBridgeConnectionGauge creates a new bridge connection gauge
+func NewBridgeConnectionGauge() *BridgeConnectionGauge {
+	gauge := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "bridge_connections_active",
+			Help: "Number of active bridge connections",
+		},
+		[]string{"protocol", "service"},
+	)
+	
+	prometheus.MustRegister(gauge)
+	
+	return &BridgeConnectionGauge{
+		gauge: gauge,
+	}
+}
+
+// Set sets the gauge value for a specific protocol and service
+func (g *BridgeConnectionGauge) Set(protocol, service string, value float64) {
+	g.gauge.WithLabelValues(protocol, service).Set(value)
+}
+
+// Inc increments the gauge for a specific protocol and service
+func (g *BridgeConnectionGauge) Inc(protocol, service string) {
+	g.gauge.WithLabelValues(protocol, service).Inc()
+}
+
+// Dec decrements the gauge for a specific protocol and service
+func (g *BridgeConnectionGauge) Dec(protocol, service string) {
+	g.gauge.WithLabelValues(protocol, service).Dec()
+}

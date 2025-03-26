@@ -3,142 +3,209 @@
 package metrics
 
 import (
-    "context"
-    "sync"
     "time"
+
+    "github.com/prometheus/client_golang/prometheus"
+    "github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/config"
+    "go.uber.org/zap"
 )
 
-// Collector provides centralized metrics collection and distribution
+// Collector handles metrics collection
 type Collector struct {
-    mu           sync.RWMutex
-    config       *Config
-    storage      StorageEngine
-    processors   []MetricsProcessor
-    subscribers  map[chan<- Metric]bool
-    metricsBatch []Metric
+    config      config.MetricsConfig
+    logger      *zap.SugaredLogger
+    httpCounter *prometheus.CounterVec
+    httpLatency *prometheus.HistogramVec
+    
+    // Resource metrics
+    cpuUsage    prometheus.Gauge
+    memoryUsage prometheus.Gauge
+    diskUsage   prometheus.Gauge
+    
+    // Network metrics
+    networkIn   prometheus.Counter
+    networkOut  prometheus.Counter
 }
 
-// Collect gathers metrics from a specific source
+// NewCollector creates a new metrics collector
+func NewCollector(config config.MetricsConfig, logger *zap.SugaredLogger) *Collector {
+    collector := &Collector{
+        config: config,
+        logger: logger,
+        
+        // HTTP metrics
+        httpCounter: prometheus.NewCounterVec(
+            prometheus.CounterOpts{
+                Name: "http_requests_total",
+                Help: "Total number of HTTP requests",
+            },
+            []string{"method", "path", "status"},
+        ),
+        httpLatency: prometheus.NewHistogramVec(
+            prometheus.HistogramOpts{
+                Name:    "http_request_duration_seconds",
+                Help:    "HTTP request latency in seconds",
+                Buckets: prometheus.DefBuckets,
+            },
+            []string{"method", "path"},
+        ),
+        
+        // Resource metrics
+        cpuUsage: prometheus.NewGauge(
+            prometheus.GaugeOpts{
+                Name: "system_cpu_usage_percent",
+                Help: "Current CPU usage in percent",
+            },
+        ),
+        memoryUsage: prometheus.NewGauge(
+            prometheus.GaugeOpts{
+                Name: "system_memory_usage_percent",
+                Help: "Current memory usage in percent",
+            },
+        ),
+        diskUsage: prometheus.NewGauge(
+            prometheus.GaugeOpts{
+                Name: "system_disk_usage_percent",
+                Help: "Current disk usage in percent",
+            },
+        ),
+        
+        // Network metrics
+        networkIn: prometheus.NewCounter(
+            prometheus.CounterOpts{
+                Name: "network_bytes_received",
+                Help: "Total number of bytes received",
+            },
+        ),
+        networkOut: prometheus.NewCounter(
+            prometheus.CounterOpts{
+                Name: "network_bytes_sent",
+                Help: "Total number of bytes sent",
+            },
+        ),
+    }
+    
+    // Register the metrics
+    prometheus.MustRegister(
+        collector.httpCounter,
+        collector.httpLatency,
+        collector.cpuUsage,
+        collector.memoryUsage,
+        collector.diskUsage,
+        collector.networkIn,
+        collector.networkOut,
+    )
+    
+    // Start the resource metrics collection
+    if config.Enabled {
+        go collector.collectResourceMetrics(config.Interval)
+    }
+    
+    return collector
+}
+
+// RecordHTTPRequest records metrics for an HTTP request
+func (c *Collector) RecordHTTPRequest(method, path string, status int, duration float64) {
+    statusStr := string(status)
+    c.httpCounter.WithLabelValues(method, path, statusStr).Inc()
+    c.httpLatency.WithLabelValues(method, path).Observe(duration)
+}
+
+// RecordNetworkActivity records network activity
+func (c *Collector) RecordNetworkActivity(bytesIn, bytesOut float64) {
+    c.networkIn.Add(bytesIn)
+    c.networkOut.Add(bytesOut)
+}
+
+// Collect provides backwards compatibility with existing code that uses the Collect method
 func (c *Collector) Collect(source string, name string, value float64, tags map[string]string) {
-    metric := Metric{
-        Source:    source,
-        Name:      name,
-        Value:     value,
-        Tags:      tags,
-        Timestamp: time.Now(),
+    // Convert tags to a slice of string values for Prometheus labels
+    if name == "" || source == "" {
+        c.logger.Warnw("Invalid metric data", "source", source, "name", name)
+        return
     }
     
-    // Process metric through pipeline
-    for _, processor := range c.processors {
-        metric = processor.Process(metric)
-    }
-    
-    // Add to batch for storage
-    c.mu.Lock()
-    c.metricsBatch = append(c.metricsBatch, metric)
-    if len(c.metricsBatch) >= c.config.BatchSize {
-        c.flushBatchAsync()
-    }
-    c.mu.Unlock()
-    
-    // Distribute to subscribers
-    c.publishMetric(metric)
-}
-
-// NewCollector creates a new metrics collector with the specified configuration
-func NewCollector(config *Config) *Collector {
-    if config == nil {
-        config = DefaultConfig()
-    }
-    
-    return &Collector{
-        config:      config,
-        subscribers: make(map[chan<- Metric]bool),
-        metricsBatch: make([]Metric, 0, config.BatchSize),
-    }
-}
-
-// Subscribe registers a channel to receive metrics
-func (c *Collector) Subscribe(ch chan<- Metric) func() {
-    c.mu.Lock()
-    defer c.mu.Unlock()
-    
-    c.subscribers[ch] = true
-    
-    return func() {
-        c.mu.Lock()
-        defer c.mu.Unlock()
-        delete(c.subscribers, ch)
-    }
-}
-
-// publishMetric sends a metric to all subscribers
-func (c *Collector) publishMetric(metric Metric) {
-    c.mu.RLock()
-    defer c.mu.RUnlock()
-    
-    for ch := range c.subscribers {
-        select {
-        case ch <- metric:
-            // Successfully sent
-        default:
-            // Channel is blocked, skip this subscriber
+    // Handle different metric types based on source
+    switch source {
+    case "http":
+        if method, ok := tags["method"]; ok {
+            if path, ok := tags["path"]; ok {
+                if status, ok := tags["status"]; ok {
+                    c.httpCounter.WithLabelValues(method, path, status).Inc()
+                }
+            }
         }
+    case "latency":
+        if method, ok := tags["method"]; ok {
+            if path, ok := tags["path"]; ok {
+                c.httpLatency.WithLabelValues(method, path).Observe(value)
+            }
+        }
+    case "network":
+        if direction, ok := tags["direction"]; ok {
+            if direction == "in" {
+                c.networkIn.Add(value)
+            } else if direction == "out" {
+                c.networkOut.Add(value)
+            }
+        }
+    default:
+        c.logger.Warnw("Unknown metric source", "source", source)
     }
 }
 
-// flushBatchAsync asynchronously flushes the metrics batch to storage
-func (c *Collector) flushBatchAsync() {
-    batch := c.metricsBatch
-    c.metricsBatch = make([]Metric, 0, c.config.BatchSize)
-    
-    go func() {
-        if err := c.storage.Store(batch); err != nil {
-            // Handle storage error
-        }
-    }()
-}
-
-// Start begins the metrics collection process
-func (c *Collector) Start(ctx context.Context) error {
-    // Initialize storage if needed
-    if c.storage == nil {
-        var err error
-        c.storage, err = NewStorage(c.config.StorageConfig)
-        if err != nil {
-            return err
-        }
-    }
-    
-    // Start periodic flush
-    go c.periodicFlush(ctx)
-    
-    return nil
-}
-
-// periodicFlush periodically flushes metrics to storage
-func (c *Collector) periodicFlush(ctx context.Context) {
-    ticker := time.NewTicker(c.config.FlushInterval)
+// collectResourceMetrics periodically collects resource metrics
+func (c *Collector) collectResourceMetrics(interval time.Duration) {
+    ticker := time.NewTicker(interval)
     defer ticker.Stop()
     
     for {
         select {
-        case <-ctx.Done():
-            return
         case <-ticker.C:
-            c.mu.Lock()
-            if len(c.metricsBatch) > 0 {
-                c.flushBatchAsync()
+            // Collect CPU usage
+            cpuUsage, err := getCPUUsage()
+            if err != nil {
+                c.logger.Warnw("Failed to collect CPU usage", "error", err)
+            } else {
+                c.cpuUsage.Set(cpuUsage)
             }
-            c.mu.Unlock()
+            
+            // Collect memory usage
+            memoryUsage, err := getMemoryUsage()
+            if err != nil {
+                c.logger.Warnw("Failed to collect memory usage", "error", err)
+            } else {
+                c.memoryUsage.Set(memoryUsage)
+            }
+            
+            // Collect disk usage
+            diskUsage, err := getDiskUsage()
+            if err != nil {
+                c.logger.Warnw("Failed to collect disk usage", "error", err)
+            } else {
+                c.diskUsage.Set(diskUsage)
+            }
         }
     }
 }
 
-// DefaultConfig returns the default metrics configuration
-func DefaultConfig() *Config {
-    return &Config{
-        BatchSize:     100,
-        FlushInterval: 10 * time.Second,
-    }
+// getCPUUsage returns the current CPU usage in percent
+func getCPUUsage() (float64, error) {
+    // Implementation depends on the platform
+    // This is a placeholder for now
+    return 0, nil
+}
+
+// getMemoryUsage returns the current memory usage in percent
+func getMemoryUsage() (float64, error) {
+    // Implementation depends on the platform
+    // This is a placeholder for now
+    return 0, nil
+}
+
+// getDiskUsage returns the current disk usage in percent
+func getDiskUsage() (float64, error) {
+    // Implementation depends on the platform
+    // This is a placeholder for now
+    return 0, nil
 }

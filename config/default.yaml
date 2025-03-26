@@ -1,0 +1,63 @@
+# QUANT WebWork GO - Default Configuration
+
+server:
+  host: 0.0.0.0
+  port: 8080
+  timeout: 30s
+  request_log: true
+  max_request_size: 10485760  # 10MB
+
+security:
+  tls_enabled: false
+  cert_file: certs/server.crt
+  key_file: certs/server.key
+  jwt_secret: ${QUANT_JWT_SECRET}  # Set via environment variable
+  token_expiry_min: 60  # Minutes
+  rate_limiting:
+    enabled: true
+    default_limit: 100  # requests per interval
+    interval: 1m  # 1 minute
+  ip_masking:
+    enabled: true
+    rotation_interval: 1h  # 1 hour
+
+bridge:
+  enabled: true
+  default_protocol: rest
+  max_concurrent_requests: 100
+  request_timeout: 15s
+  protocols:
+    rest:
+      host: localhost
+      port: 8081
+      timeout: 10s
+      max_retries: 3
+    grpc:
+      host: localhost
+      port: 50051
+      timeout: 5s
+      max_retries: 2
+    websocket:
+      host: localhost
+      port: 8082
+      timeout: 30s
+      max_retries: 1
+
+monitoring:
+  metrics:
+    enabled: true
+    path: /metrics
+    collection_interval: 15s
+    batch_size: 100
+  tracing:
+    enabled: false
+    provider: jaeger
+    sample_rate: 0.1
+  logging:
+    level: info
+    format: json
+    output_path: stdout
+  profiling:
+    enabled: false
+    port: 6060
+    path: /debug/pprof

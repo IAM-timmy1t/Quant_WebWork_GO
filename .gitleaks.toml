@@ -1,0 +1,35 @@
+# GitLeaks Configuration
+title = "Quant WebWorks GO Security Scanning"
+
+[allowlist]
+description = "Allowlist for test patterns and mock data"
+paths = [
+    '''.*test\.go$''',
+    '''.*_test\.go$''',
+    '''.*\.md$''',
+    '''.*example.*''',
+    '''.*\.example\..*''',
+]
+regexes = [
+    '''AKIAIOSFODNN7EXAMPLE''',
+    '''wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY''',
+    '''(?i)example|sample|test|mock'''
+]
+
+[[rules]]
+id = "generic-api-key"
+description = "Generic API Key"
+regex = '''(?i)((key|api|token|secret|client|passwd|password|auth|access)(.{0,20})(\s*[:=>]|\s{5,})\s*)['"]([0-9a-zA-Z\-_=]{20,})['"]'''
+secretGroup = 5
+entropy = 3.7
+entropyGroup = 5
+
+[[rules]]
+id = "high-entropy-base64"
+description = "High entropy base64 string"
+regex = '''(?i)([0-9a-z\-_=]{40,})'''
+entropy = 4.5
+entropyGroup = 1
+allowList = [
+    '''xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx''',
+]

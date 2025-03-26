@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	gwruntime "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/config"
 	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/metrics"
@@ -23,7 +22,6 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
-	"google.golang.org/grpc/web"
 )
 
 // Common errors
@@ -71,9 +69,6 @@ type GRPCAdapterConfig struct {
 	EnableReflection   bool // Enable gRPC reflection service
 	EnableHealthCheck  bool // Enable health checking
 	EnableTracing      bool // Enable distributed tracing
-	EnableWeb          bool // Enable gRPC-Web
-	CORSOrigins        []string // Allowed CORS origins for gRPC-Web
-	CORSHeaders        []string // Allowed CORS headers for gRPC-Web
 }
 
 // DefaultGRPCAdapterConfig returns the default configuration for the gRPC adapter
@@ -107,12 +102,6 @@ func DefaultGRPCAdapterConfig() *GRPCAdapterConfig {
 		EnableReflection:  true,
 		EnableHealthCheck: true,
 		EnableTracing:     true,
-		EnableWeb:         false,
-		CORSOrigins:       []string{"*"},
-		CORSHeaders: []string{
-			"Accept", "Content-Type", "Content-Length", "Accept-Encoding",
-			"Authorization", "X-CSRF-Token", "X-Requested-With",
-		},
 	}
 }
 
@@ -132,7 +121,7 @@ type GRPCAdapter struct {
 	connections     map[string]*ConnectionPool
 	connectionMutex sync.RWMutex
 	logger          Logger
-	metrics         metrics.Collector
+	metrics         *metrics.Collector
 	configManager   *config.Manager
 	serviceRegistry map[string]interface{}
 	interceptors    []grpc.UnaryServerInterceptor
@@ -154,13 +143,14 @@ type ConnectionPool struct {
 func NewGRPCAdapter(
 	config *GRPCAdapterConfig,
 	logger Logger,
-	metrics metrics.Collector,
+	metrics *metrics.Collector,
 	configManager *config.Manager,
 ) *GRPCAdapter {
 	if config == nil {
 		config = DefaultGRPCAdapterConfig()
 	}
 	
+	// Create a new adapter instance
 	adapter := &GRPCAdapter{
 		config:          config,
 		connections:     make(map[string]*ConnectionPool),
@@ -318,7 +308,9 @@ func (a *GRPCAdapter) Start() error {
 	}
 	
 	// Log and record server start in metrics
-	a.metrics.ServerUptime.Add(0) // Initialize the counter
+	if a.metrics != nil {
+		a.metrics.ServerUptime()
+	}
 	
 	// Start the HTTP server in a goroutine
 	go func() {
@@ -462,23 +454,19 @@ func (a *GRPCAdapter) Call(
 	// Make the call
 	err = conn.Invoke(timeoutCtx, method, request, response, options...)
 	
-	// Track metrics
+	// Record metrics
 	if a.metrics != nil {
-		a.metrics.ObserveHistogram("grpc_request_duration_seconds", time.Since(startTime).Seconds(), map[string]string{
+		a.metrics.IncCounter("grpc.requests_total", map[string]string{
 			"method": method,
-			"target": target,
+		})
+		a.metrics.ObserveHistogram("grpc.request_duration_seconds", time.Since(startTime).Seconds(), map[string]string{
+			"method": method,
 		})
 		
 		if err != nil {
-			a.metrics.IncCounter("grpc_request_errors", map[string]string{
+			a.metrics.IncCounter("grpc.errors_total", map[string]string{
 				"method": method,
-				"target": target,
 				"code":   grpcStatusCode(err),
-			})
-		} else {
-			a.metrics.IncCounter("grpc_requests_total", map[string]string{
-				"method": method,
-				"target": target,
 			})
 		}
 	}
@@ -607,6 +595,13 @@ func (a *GRPCAdapter) loggingInterceptor(
 		})
 	}
 	
+	// Record metrics before each request if enabled
+	if a.metrics != nil {
+		a.metrics.IncCounter("grpc.requests_total", map[string]string{
+			"method": info.FullMethod,
+		})
+	}
+	
 	return resp, err
 }
 
@@ -624,20 +619,14 @@ func (a *GRPCAdapter) metricsInterceptor(
 	
 	// Record metrics
 	if a.metrics != nil {
-		duration := time.Since(startTime)
-		
-		a.metrics.ObserveHistogram("grpc_handler_duration_seconds", duration.Seconds(), map[string]string{
+		a.metrics.ObserveHistogram("grpc.request_duration_seconds", time.Since(startTime).Seconds(), map[string]string{
 			"method": info.FullMethod,
 		})
 		
 		if err != nil {
-			a.metrics.IncCounter("grpc_handler_errors", map[string]string{
+			a.metrics.IncCounter("grpc.errors_total", map[string]string{
 				"method": info.FullMethod,
 				"code":   grpcStatusCode(err),
-			})
-		} else {
-			a.metrics.IncCounter("grpc_handler_calls", map[string]string{
-				"method": info.FullMethod,
 			})
 		}
 	}
@@ -664,9 +653,9 @@ func (a *GRPCAdapter) recoveryInterceptor(
 			// Return a gRPC error
 			err = status.Errorf(codes.Internal, "internal error")
 			
-			// Track metric
+			// Record metrics if enabled
 			if a.metrics != nil {
-				a.metrics.IncCounter("grpc_handler_panics", map[string]string{
+				a.metrics.IncCounter("grpc.panics_total", map[string]string{
 					"method": info.FullMethod,
 				})
 			}
@@ -886,8 +875,3 @@ func NewBridgeError(code string, message string, details map[string]interface{})
 func (e *BridgeError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }
-
-
-
-
-

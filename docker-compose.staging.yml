@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  app:
+    image: ${DOCKER_REGISTRY}/${REPO_OWNER}/${DOCKER_IMAGE}:staging
+    container_name: quant-webworks-staging
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - ENV=staging
+      - LOG_LEVEL=info
+      - ENABLE_PROFILING=true
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    volumes:
+      - ./configs:/app/configs
+    networks:
+      - quant-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.75'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: quant-prometheus-staging
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deployments/monitoring/prometheus:/etc/prometheus
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - quant-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: quant-grafana-staging
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./deployments/monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_password
+    networks:
+      - quant-network
+    depends_on:
+      - prometheus
+
+networks:
+  quant-network:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:
