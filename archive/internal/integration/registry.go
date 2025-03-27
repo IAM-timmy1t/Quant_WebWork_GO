@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/timot/Quant_WebWork_GO/pkg/models"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/pkg/models"
 )
 
 // Registry manages registered applications and services
@@ -137,3 +137,4 @@ func (r *Registry) CheckHealth(ctx context.Context) map[string]string {
 
 	return health
 }
+

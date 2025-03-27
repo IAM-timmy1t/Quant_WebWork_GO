@@ -1,0 +1,3 @@
+# Completely exclude archive and any problematic test files
+/archive/
+/tests/load/

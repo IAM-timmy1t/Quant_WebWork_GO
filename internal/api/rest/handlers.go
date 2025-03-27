@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/bridge"
 	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/metrics"
 )
 
@@ -323,9 +322,9 @@ func RecordHTTPRequest(metricsCollector *metrics.Collector, method, path string,
 	}
 	
 	metricsCollector.Collect("http", "request_duration", float64(duration.Milliseconds()), tags)
-	metricsCollector.IncCounter("http_requests_total", tags)
+	metricsCollector.Collect("http", "requests_total", 1.0, tags)
 	
 	// Categorize by status code family (2xx, 4xx, 5xx)
 	statusFamily := fmt.Sprintf("%dxx", status/100)
-	metricsCollector.IncCounter("http_requests_"+statusFamily, tags)
+	metricsCollector.Collect("http", "requests_"+statusFamily, 1.0, tags)
 }

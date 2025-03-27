@@ -3,7 +3,7 @@ package dashboard
 import (
 	"time"
 
-	"github.com/timot/Quant_WebWork_GO/internal/monitoring"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/monitoring"
 )
 
 // MessageType represents different types of dashboard messages
@@ -113,3 +113,4 @@ func (f *MetricFilters) FilterSecurityEvent(event monitoring.SecurityEvent) bool
 
 	return true
 }
+

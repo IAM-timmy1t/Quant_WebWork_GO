@@ -20,12 +20,12 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/trace"
 
-	"github.com/timot/Quant_WebWork_GO/internal/api/rest"
-	"github.com/timot/Quant_WebWork_GO/internal/api/websocket"
-	"github.com/timot/Quant_WebWork_GO/internal/config"
-	"github.com/timot/Quant_WebWork_GO/internal/dashboard"
-	"github.com/timot/Quant_WebWork_GO/internal/monitoring"
-	"github.com/timot/Quant_WebWork_GO/internal/storage"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/api/rest"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/api/websocket"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/config"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/dashboard"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/monitoring"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/storage"
 )
 
 const (
@@ -169,3 +169,4 @@ func initMetrics(logger *logrus.Logger) *metric.MeterProvider {
 	logger.Info("Metrics initialized")
 	return mp
 }
+

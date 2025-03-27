@@ -13,39 +13,31 @@ import (
 	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/bridge"
 	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/bridge/adapters"
 	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/bridge/protocol"
-	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/tokens"
 	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/security/risk"
 )
 
 // TestBridgeModuleVerification verifies that the bridge module works correctly with
 // the React frontend by simulating frontend requests and validating responses.
 func TestBridgeModuleVerification(t *testing.T) {
-	// Create token planner for testing
-	planner := tokens.NewPlanner(&tokens.PlannerConfig{
-		DefaultBudget: tokens.TokenBudget{
-			MaxTokens: 1000000,
-			RefillRate: 10000,
-			RefillInterval: time.Minute,
-		},
+	// Create risk analyzer for testing
+	analyzer := risk.NewAnalyzer(risk.Config{
+		BaselineRisk: 10,
+		MaxRiskScore: 100,
 	})
 
-	// Create token analyzer for testing
-	analyzer := risk.NewTokenAnalyzer(nil)
-
-	// Create token protocol for testing
-	tokenProtocol := protocol.NewTokenProtocol(protocol.TokenProtocolConfig{
-		ModelID:           "test-model",
-		MaxTokenPerMessage: 8192,
-		DefaultBudget:     tokens.TokenBudget{MaxTokens: 1000000},
-		EnableCompression: true,
-		TokenThreshold:    0.8,
-		MetricsEnabled:    true,
-		AnalyzerConfig:    map[string]interface{}{"risk_threshold": 0.7},
-		DefaultFormat:     protocol.MessageFormatJSON,
-		EnableFrontendAPI: true,
-		CORSOrigins:       []string{"http://localhost:3000"},
-		ReactEndpoints:    []string{"/api/bridge"},
-	}, planner, analyzer)
+	// Create protocol for testing
+	protocolConfig := protocol.StandardProtocolConfig{
+		ModelID:            "test-model",
+		EnableCompression:  true,
+		MetricsEnabled:     true,
+		AnalyzerConfig:     map[string]interface{}{"risk_threshold": 0.7},
+		DefaultFormat:      protocol.MessageFormatJSON,
+		EnableFrontendAPI:  true,
+		CORSOrigins:        []string{"http://localhost:3000"},
+		ReactEndpoints:     []string{"/api/bridge"},
+	}
+	
+	standardProtocol := protocol.NewStandardProtocol(protocolConfig, nil, analyzer)
 
 	// Create bridge instance
 	bridgeInstance := bridge.NewBridge(&bridge.BridgeConfig{
@@ -56,7 +48,7 @@ func TestBridgeModuleVerification(t *testing.T) {
 	})
 
 	// Add protocol to bridge
-	bridgeInstance.AddProtocol(tokenProtocol)
+	bridgeInstance.AddProtocol(standardProtocol)
 
 	// Start bridge
 	err := bridgeInstance.Start(context.Background())
@@ -65,433 +57,318 @@ func TestBridgeModuleVerification(t *testing.T) {
 	}
 
 	// Connect protocol
-	err = tokenProtocol.Connect(context.Background())
+	err = standardProtocol.Connect(context.Background())
 	if err != nil {
 		t.Fatalf("Failed to connect protocol: %v", err)
 	}
 
 	// Clean up when test finishes
 	defer func() {
-		tokenProtocol.Disconnect(context.Background())
+		standardProtocol.Disconnect(context.Background())
 		bridgeInstance.Stop(context.Background())
 	}()
 
 	// Run verification tests
-	t.Run("TestMessageTypesSupported", testMessageTypesSupported(tokenProtocol))
-	t.Run("TestAnalysisRequest", testAnalysisRequest(tokenProtocol))
-	t.Run("TestErrorHandling", testErrorHandling(tokenProtocol))
-	t.Run("TestMetricsEndpoint", testMetricsEndpoint(tokenProtocol))
-	t.Run("TestReactCompatibility", testReactCompatibility(tokenProtocol))
+	t.Run("TestMessageTypesSupported", testMessageTypesSupported(standardProtocol))
+	t.Run("TestAnalysisRequest", testAnalysisRequest(standardProtocol))
+	t.Run("TestErrorHandling", testErrorHandling(standardProtocol))
+	t.Run("TestMetricsEndpoint", testMetricsEndpoint(standardProtocol))
+	t.Run("TestReactCompatibility", testReactCompatibility(standardProtocol))
 }
 
 // Test that all required message types are supported
-func testMessageTypesSupported(p *protocol.TokenProtocol) func(t *testing.T) {
+func testMessageTypesSupported(p *protocol.StandardProtocol) func(t *testing.T) {
 	return func(t *testing.T) {
 		// Required message types for React frontend
-		requiredTypes := []protocol.MessageType{
-			protocol.MessageTypeAnalysisRequest,
-			protocol.MessageTypeAnalysisResponse,
-			protocol.MessageTypeRiskRequest,
-			protocol.MessageTypeRiskResponse,
-			protocol.MessageTypeEvent,
-			protocol.MessageTypeMetrics,
-			protocol.MessageTypeUIUpdate,
-			protocol.MessageTypeError,
+		requiredTypes := []string{
+			"connection/init",
+			"connection/status",
+			"data/request",
+			"data/response",
+			"system/metrics",
+			"system/error",
 		}
 
-		// Create test message to get responses for each type
 		for _, msgType := range requiredTypes {
-			// Create test message
-			testMsg := createTestMessage(string(msgType))
-
-			// Process message
-			response, err := p.Process(context.Background(), testMsg)
-			if err != nil {
-				t.Logf("Error processing message type %s: %v", msgType, err)
-				// Some message types might legitimately return errors,
-				// so this is not always a test failure
-				continue
+			msg := createTestMessage(msgType)
+			if !p.SupportsMessageType(msg.Type) {
+				t.Errorf("Protocol does not support required message type: %s", msgType)
 			}
+		}
 
-			// Verify response
-			if response == nil {
-				t.Errorf("No response received for message type %s", msgType)
-			}
+		// Verify message format conversion
+		msg := createTestMessage("data/request")
+		jsonMsg, err := p.ConvertMessageFormat(msg, protocol.MessageFormatJSON)
+		if err != nil {
+			t.Errorf("Failed to convert message to JSON format: %v", err)
+		}
+
+		if jsonMsg.Format != protocol.MessageFormatJSON {
+			t.Errorf("Expected message format to be JSON, got: %s", jsonMsg.Format)
 		}
 	}
 }
 
 // Test analysis request handling
-func testAnalysisRequest(p *protocol.TokenProtocol) func(t *testing.T) {
+func testAnalysisRequest(p *protocol.StandardProtocol) func(t *testing.T) {
 	return func(t *testing.T) {
-		// Create analysis request message
-		metadata := map[string]interface{}{
-			"token_address": "0x1234567890abcdef",
-		}
-		metadataJSON, _ := json.Marshal(metadata)
-
-		msg := &protocol.RawMessage{
-			ID:        "test-analysis-request",
-			Type:      string(protocol.MessageTypeAnalysisRequest),
-			Content:   "",
-			Metadata:  string(metadataJSON),
-			Timestamp: time.Now().UnixNano(),
+		// Create data request message
+		msg := createTestMessage("data/request")
+		msg.Payload = map[string]interface{}{
+			"query": "test query",
+			"options": map[string]interface{}{
+				"full_analysis": true,
+			},
 		}
 
 		// Process message
 		response, err := p.Process(context.Background(), msg)
 		if err != nil {
-			t.Fatalf("Failed to process analysis request: %v", err)
+			t.Fatalf("Failed to process message: %v", err)
 		}
 
 		// Verify response
-		if response == nil {
-			t.Fatal("No response received for analysis request")
+		if response.Type != "data/response" {
+			t.Errorf("Expected response type to be data/response, got: %s", response.Type)
 		}
 
-		// Verify response type
-		if response.Type() != string(protocol.MessageTypeAnalysisResponse) && 
-		   response.Type() != string(protocol.MessageTypeError) {
-			t.Errorf("Expected response type %s or %s, got %s", 
-				protocol.MessageTypeAnalysisResponse, 
-				protocol.MessageTypeError, 
-				response.Type())
+		if response.RequestID != msg.RequestID {
+			t.Errorf("Expected response requestID to match request, got: %s", response.RequestID)
 		}
 
-		// Parse response metadata
-		var responseMetadata map[string]interface{}
-		err = json.Unmarshal([]byte(response.Metadata()), &responseMetadata)
-		if err != nil {
-			t.Fatalf("Failed to parse response metadata: %v", err)
-		}
-
-		// Verify some response data exists
-		if len(responseMetadata) == 0 {
-			t.Error("Response metadata is empty")
+		// Validate status in payload
+		statusValue, ok := response.Payload["status"]
+		if !ok {
+			t.Errorf("Response missing 'status' field in payload")
+		} else if status, ok := statusValue.(string); !ok || status != "success" {
+			t.Errorf("Expected status to be 'success', got: %v", statusValue)
 		}
 	}
 }
 
 // Test error handling
-func testErrorHandling(p *protocol.TokenProtocol) func(t *testing.T) {
+func testErrorHandling(p *protocol.StandardProtocol) func(t *testing.T) {
 	return func(t *testing.T) {
-		// Create invalid request (missing required fields)
-		metadata := map[string]interface{}{
-			// Deliberately missing token_address
-		}
-		metadataJSON, _ := json.Marshal(metadata)
-
-		msg := &protocol.RawMessage{
-			ID:        "test-error-handling",
-			Type:      string(protocol.MessageTypeAnalysisRequest),
-			Content:   "",
-			Metadata:  string(metadataJSON),
-			Timestamp: time.Now().UnixNano(),
-		}
-
-		// Process message
+		// Create invalid message
+		msg := createTestMessage("invalid/type")
+		
+		// Process message - should result in error
 		response, err := p.Process(context.Background(), msg)
+		
+		// Should return error response, not actual error
 		if err != nil {
-			// Some errors might be returned directly, which is fine
-			t.Logf("Expected error returned: %v", err)
-			return
+			t.Fatalf("Expected error to be handled internally, got: %v", err)
 		}
-
-		if response == nil {
-			t.Fatal("No response received for erroneous request")
+		
+		// Verify error response
+		if response.Type != "system/error" {
+			t.Errorf("Expected response type to be system/error, got: %s", response.Type)
 		}
-
-		// Should have error response
-		if response.Type() != string(protocol.MessageTypeError) {
-			t.Errorf("Expected error response, got %s", response.Type())
+		
+		// Check error code and message
+		errorCode, ok := response.Payload["code"]
+		if !ok {
+			t.Errorf("Error response missing 'code' field")
 		}
-
-		// Parse response metadata
-		var responseMetadata map[string]interface{}
-		err = json.Unmarshal([]byte(response.Metadata()), &responseMetadata)
-		if err != nil {
-			t.Fatalf("Failed to parse error metadata: %v", err)
+		
+		errorMsg, ok := response.Payload["message"]
+		if !ok {
+			t.Errorf("Error response missing 'message' field")
 		}
-
-		// Verify error message exists
-		if _, ok := responseMetadata["error"]; !ok {
-			t.Error("Error message missing from response")
-		}
+		
+		// Print the error details for debugging
+		t.Logf("Error code: %v, message: %v", errorCode, errorMsg)
 	}
 }
 
 // Test metrics endpoint
-func testMetricsEndpoint(p *protocol.TokenProtocol) func(t *testing.T) {
+func testMetricsEndpoint(p *protocol.StandardProtocol) func(t *testing.T) {
 	return func(t *testing.T) {
-		// Create metrics request message
-		msg := &protocol.RawMessage{
-			ID:        "test-metrics-request",
-			Type:      string(protocol.MessageTypeMetrics),
-			Content:   "",
-			Metadata:  "{}",
-			Timestamp: time.Now().UnixNano(),
-		}
-
+		// Create metrics request
+		msg := createTestMessage("system/metrics")
+		
 		// Process message
 		response, err := p.Process(context.Background(), msg)
 		if err != nil {
-			t.Fatalf("Failed to process metrics request: %v", err)
+			t.Fatalf("Failed to get metrics: %v", err)
 		}
-
-		// Verify response
-		if response == nil {
-			t.Fatal("No response received for metrics request")
+		
+		// Verify response type
+		if response.Type != "system/metrics" {
+			t.Errorf("Expected response type to be system/metrics, got: %s", response.Type)
 		}
-
-		// Parse response metadata
-		var responseMetadata map[string]interface{}
-		err = json.Unmarshal([]byte(response.Metadata()), &responseMetadata)
-		if err != nil {
-			t.Fatalf("Failed to parse metrics metadata: %v", err)
+		
+		// Verify metrics data in payload
+		metricsData, ok := response.Payload["metrics"]
+		if !ok {
+			t.Errorf("Metrics response missing 'metrics' field")
 		}
-
-		// Verify metrics data exists
-		if metrics, ok := responseMetadata["metrics"]; !ok || metrics == nil {
-			t.Error("Metrics missing from response")
+		
+		// Check that we have some metrics data
+		metricsMap, ok := metricsData.(map[string]interface{})
+		if !ok {
+			t.Errorf("Expected metrics to be a map, got: %T", metricsData)
+		} else if len(metricsMap) == 0 {
+			t.Errorf("Expected metrics data to be non-empty")
 		}
 	}
 }
 
 // Test React compatibility
-func testReactCompatibility(p *protocol.TokenProtocol) func(t *testing.T) {
+func testReactCompatibility(p *protocol.StandardProtocol) func(t *testing.T) {
 	return func(t *testing.T) {
-		// Simulate React client request format
-		reactClientMsg := map[string]interface{}{
-			"id":      "react-client-msg-123",
-			"type":    "analysis-request",
-			"content": "",
-			"metadata": map[string]interface{}{
-				"token_address": "0xabcdef1234567890",
-				"client_info": map[string]interface{}{
-					"type":        "web",
-					"version":     "1.0.0",
-					"environment": "development",
-					"platform":    "browser",
-				},
+		// Simulate React frontend initialization
+		initMsg := createTestMessage("connection/init")
+		initMsg.Payload = map[string]interface{}{
+			"client": "react-frontend",
+			"version": "1.0.0",
+			"capabilities": []string{
+				"compression",
+				"streaming",
+				"metrics",
 			},
-			"timestamp": time.Now().UnixMilli(),
 		}
-
-		reactClientMsgJSON, _ := json.Marshal(reactClientMsg)
-
-		// Create message
-		msg := &protocol.RawMessage{
-			ID:        reactClientMsg["id"].(string),
-			Type:      reactClientMsg["type"].(string),
-			Content:   "",
-			Metadata:  string(reactClientMsgJSON),
-			Timestamp: reactClientMsg["timestamp"].(int64),
-		}
-
-		// Process message
-		response, err := p.Process(context.Background(), msg)
+		
+		// Process initialization
+		response, err := p.Process(context.Background(), initMsg)
 		if err != nil {
-			t.Fatalf("Failed to process React client message: %v", err)
+			t.Fatalf("Failed to initialize connection: %v", err)
 		}
-
-		// Verify response
-		if response == nil {
-			t.Fatal("No response received for React client message")
+		
+		// Verify connection status
+		if response.Type != "connection/status" {
+			t.Errorf("Expected response type to be connection/status, got: %s", response.Type)
 		}
-
-		// Parse response data
-		var responseData map[string]interface{}
-		err = json.Unmarshal([]byte(response.Metadata()), &responseData)
+		
+		statusValue, ok := response.Payload["status"]
+		if !ok {
+			t.Errorf("Connection status missing 'status' field")
+		} else if status, ok := statusValue.(string); !ok || status != "connected" {
+			t.Errorf("Expected connection status to be 'connected', got: %v", statusValue)
+		}
+		
+		// Test React data request flow
+		dataMsg := createTestMessage("data/request")
+		dataMsg.Payload = map[string]interface{}{
+			"action": "get_data",
+			"params": map[string]interface{}{
+				"id": "test-id",
+			},
+		}
+		
+		// Process data request
+		dataResponse, err := p.Process(context.Background(), dataMsg)
 		if err != nil {
-			t.Fatalf("Failed to parse response data: %v", err)
+			t.Fatalf("Failed to process data request: %v", err)
 		}
-
-		// Validate response format is compatible with React client expectations
-		if id := response.ID(); id == "" {
-			t.Error("Response missing ID required by React client")
+		
+		// Verify data response
+		if dataResponse.Type != "data/response" {
+			t.Errorf("Expected response type to be data/response, got: %s", dataResponse.Type)
 		}
-
-		if typ := response.Type(); typ == "" {
-			t.Error("Response missing Type required by React client")
+		
+		// Verify data payload exists
+		_, ok = dataResponse.Payload["data"]
+		if !ok {
+			t.Errorf("Data response missing 'data' field")
 		}
 	}
 }
 
 // Helper to create test messages
 func createTestMessage(msgType string) protocol.Message {
-	metadata := map[string]interface{}{
-		"test": true,
-		"timestamp": time.Now().Unix(),
-	}
-	
-	// Add type-specific metadata
-	switch msgType {
-	case string(protocol.MessageTypeAnalysisRequest):
-		metadata["token_address"] = "0x1234567890abcdef"
-	case string(protocol.MessageTypeRiskRequest):
-		metadata["token_addresses"] = []string{"0x1234567890abcdef", "0xfedcba0987654321"}
-	}
-	
-	metadataJSON, _ := json.Marshal(metadata)
-	
-	return &protocol.RawMessage{
-		ID:        fmt.Sprintf("test-msg-%s-%d", msgType, time.Now().UnixNano()),
+	return protocol.Message{
 		Type:      msgType,
-		Content:   "Test content",
-		Metadata:  string(metadataJSON),
-		Timestamp: time.Now().UnixNano(),
+		RequestID: fmt.Sprintf("req-%d", time.Now().UnixNano()),
+		Timestamp: time.Now().UnixMilli(),
+		Format:    protocol.MessageFormatJSON,
+		Payload:   map[string]interface{}{},
 	}
 }
 
-// Helper function for manual verification
+// RunManualVerification provides a simple way to manually verify bridge operations
+// This can be run as a standalone executable for development and debugging
 func RunManualVerification() {
-	fmt.Println("Starting manual Bridge Module verification...")
-	
-	// Create token planner
-	planner := tokens.NewPlanner(&tokens.PlannerConfig{
-		DefaultBudget: tokens.TokenBudget{
-			MaxTokens: 1000000,
-			RefillRate: 10000,
-			RefillInterval: time.Minute,
-		},
+	// Create risk analyzer for testing
+	analyzer := risk.NewAnalyzer(risk.Config{
+		BaselineRisk: 10,
+		MaxRiskScore: 100,
 	})
 
-	// Create token analyzer
-	analyzer := risk.NewTokenAnalyzer(nil)
-
-	// Create token protocol
-	tokenProtocol := protocol.NewTokenProtocol(protocol.TokenProtocolConfig{
-		ModelID:           "test-model",
-		MaxTokenPerMessage: 8192,
-		DefaultBudget:     tokens.TokenBudget{MaxTokens: 1000000},
-		EnableCompression: true,
-		TokenThreshold:    0.8,
-		MetricsEnabled:    true,
-		AnalyzerConfig:    map[string]interface{}{"risk_threshold": 0.7},
-		DefaultFormat:     protocol.MessageFormatJSON,
-		EnableFrontendAPI: true,
-		CORSOrigins:       []string{"http://localhost:3000"},
-		ReactEndpoints:    []string{"/api/bridge"},
-	}, planner, analyzer)
+	// Create protocol for testing
+	protocolConfig := protocol.StandardProtocolConfig{
+		ModelID:            "test-model",
+		EnableCompression:  true,
+		MetricsEnabled:     true,
+		AnalyzerConfig:     map[string]interface{}{"risk_threshold": 0.7},
+		DefaultFormat:      protocol.MessageFormatJSON,
+		EnableFrontendAPI:  true,
+		CORSOrigins:        []string{"http://localhost:3000"},
+		ReactEndpoints:     []string{"/api/bridge"},
+	}
+	
+	standardProtocol := protocol.NewStandardProtocol(protocolConfig, nil, analyzer)
 
 	// Create bridge instance
 	bridgeInstance := bridge.NewBridge(&bridge.BridgeConfig{
 		ID:          "test-bridge",
 		Name:        "Test Bridge",
-		Description: "Bridge for testing React frontend integration",
+		Description: "Bridge for manual verification",
 		Version:     "1.0.0",
 	})
 
 	// Add protocol to bridge
-	bridgeInstance.AddProtocol(tokenProtocol)
+	bridgeInstance.AddProtocol(standardProtocol)
 
-	// Create gRPC adapter
-	grpcAdapter := adapters.NewGRPCAdapter(&adapters.GRPCAdapterConfig{
-		Host:       "0.0.0.0",
-		Port:       8080,
-		EnableWeb:  true,
-		CORSOrigins: []string{"http://localhost:3000"},
-		EnableTLS:  false,
+	// Setup HTTP adapter
+	httpAdapter := adapters.NewHTTPAdapter(&adapters.HTTPAdapterConfig{
+		Port:            8080,
+		EnableCORS:      true,
+		AllowedOrigins:  []string{"*"},
+		AllowCredentials: true,
 	})
 
-	// Connect adapter to bridge
-	bridgeInstance.AddAdapter(grpcAdapter)
+	// Add adapter to bridge
+	bridgeInstance.AddAdapter(httpAdapter)
 
 	// Start bridge
-	fmt.Println("Starting bridge...")
-	err := bridgeInstance.Start(context.Background())
+	ctx := context.Background()
+	err := bridgeInstance.Start(ctx)
 	if err != nil {
 		fmt.Printf("Failed to start bridge: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Connect protocol
-	fmt.Println("Connecting protocol...")
-	err = tokenProtocol.Connect(context.Background())
+	err = standardProtocol.Connect(ctx)
 	if err != nil {
 		fmt.Printf("Failed to connect protocol: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Start HTTP server for testing
-	http.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status": "ok",
-			"bridge": "connected",
-			"version": "1.0.0",
-		})
-	})
+	// Print information
+	fmt.Println("Bridge is running for manual verification")
+	fmt.Println("Bridge ID:", bridgeInstance.GetID())
+	fmt.Println("Bridge Version:", bridgeInstance.GetVersion())
+	fmt.Println("HTTP Adapter listening on port 8080")
+	fmt.Println("Available endpoints:")
+	fmt.Println("- http://localhost:8080/api/bridge")
+	fmt.Println("- http://localhost:8080/metrics")
+	fmt.Println("- http://localhost:8080/health")
+	fmt.Println("\nPress Ctrl+C to stop the bridge")
 
-	// Create test endpoint
-	http.HandleFunc("/api/test", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+	// Wait for interrupt signal
+	<-ctx.Done()
 
-		var requestData map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
-			http.Error(w, "Invalid request data", http.StatusBadRequest)
-			return
-		}
-
-		// Create test message
-		msgType := requestData["type"].(string)
-		metadata, _ := json.Marshal(requestData["metadata"])
-
-		msg := &protocol.RawMessage{
-			ID:        fmt.Sprintf("test-api-%d", time.Now().UnixNano()),
-			Type:      msgType,
-			Content:   requestData["content"].(string),
-			Metadata:  string(metadata),
-			Timestamp: time.Now().UnixNano(),
-		}
-
-		// Process message
-		response, err := tokenProtocol.Process(context.Background(), msg)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Processing error: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		// Send response
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"id":        response.ID(),
-			"type":      response.Type(),
-			"content":   response.Content(),
-			"metadata":  json.RawMessage(response.Metadata()),
-			"timestamp": response.Timestamp(),
-		})
-	})
-
-	fmt.Println("Starting HTTP server on http://localhost:8090")
-	go http.ListenAndServe(":8090", nil)
-
-	fmt.Println("\nBridge verification server is running!")
-	fmt.Println("- Bridge gRPC-Web endpoint: http://localhost:8080")
-	fmt.Println("- Test HTTP API: http://localhost:8090/api/test")
-	fmt.Println("- Status endpoint: http://localhost:8090/status")
-	fmt.Println("\nPress Ctrl+C to stop...")
-
-	// Wait forever
-	select {}
+	// Cleanup
+	standardProtocol.Disconnect(ctx)
+	bridgeInstance.Stop(ctx)
 }
 
-// For manual verification
+// For manual verification, can be built as a standalone executable
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "manual" {
+	// Only run main() when explicitly built as an executable
+	if os.Getenv("GO_BRIDGE_VERIFIER") == "1" {
 		RunManualVerification()
-		return
 	}
-
-	fmt.Println("Running automated verification tests...")
-	testing.Main(func(pat, str string) (bool, error) { return true, nil }, 
-		[]testing.InternalTest{{Name: "BridgeModuleVerification", F: TestBridgeModuleVerification}},
-		nil, nil)
 }
-
-
-
-

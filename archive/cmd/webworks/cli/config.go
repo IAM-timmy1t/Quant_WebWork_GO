@@ -9,7 +9,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
-	"github.com/timot/Quant_WebWork_GO/internal/config"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/config"
 	"gopkg.in/yaml.v2"
 )
 
@@ -312,3 +312,4 @@ func hasError(issues []config.ValidationIssue) bool {
 	}
 	return false
 }
+

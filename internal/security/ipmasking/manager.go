@@ -120,6 +120,10 @@ func (m *Manager) IsEnabled() bool {
 
 // GetMaskedIP returns a masked IP for the specified original IP
 func (m *Manager) GetMaskedIP(originalIP net.IP) net.IP {
+	if originalIP == nil {
+		return nil
+	}
+
 	if !m.IsEnabled() {
 		return originalIP
 	}
@@ -200,13 +204,17 @@ func (m *Manager) rotateIPs() {
 			}
 
 			m.mutex.Lock()
-			// Save the count before clearing for logging
-			oldCount := len(m.mappings)
-			// Clear all mappings to force new ones to be generated
-			m.mappings = make(map[string]string)
+			// Create new mappings for all existing IPs
+			for originalIPStr := range m.mappings {
+				originalIP := net.ParseIP(originalIPStr)
+				if originalIP != nil {
+					maskedIP := m.generateMaskedIP(originalIP)
+					m.mappings[originalIPStr] = maskedIP.String()
+				}
+			}
 			m.mutex.Unlock()
 
-			m.logger.Infow("Rotated IP mappings", "previousCount", oldCount)
+			m.logger.Infow("Rotated IP mappings", "count", len(m.mappings))
 		}
 	}
 }

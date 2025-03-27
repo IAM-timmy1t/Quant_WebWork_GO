@@ -69,7 +69,6 @@ type Event struct {
     Severity      RiskLevel      // Severity level of the event
     ClientIP      string         // Client IP address (alias for IPAddress for compatibility)
     RequestPath   string         // Path of the HTTP request if applicable
-    TokenContext  map[string]interface{} // Token-related context for token security
 }
 
 // EnhancedEvent contains an event with additional analysis data

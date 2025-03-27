@@ -5,25 +5,28 @@ package rest
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/config"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/metrics"
 	"github.com/gorilla/mux"
+	"go.uber.org/zap"
 )
 
 // APIRouter handles REST API routing and endpoint registration
 type APIRouter struct {
 	router        *mux.Router
-	middlewares   []MiddlewareFunc
 	routes        []*Route
 	errorHandler  ErrorHandler
 	metrics       MetricsCollector
-	tokenManager  TokenManager
 	defaultCORS   *CORSOptions
 	basePath      string
 	documentation APIDocumentation
 	config        *RouterConfig
+	logger        *zap.SugaredLogger
 }
 
 // Route defines a REST API route
@@ -31,7 +34,6 @@ type Route struct {
 	Path        string           // URL path pattern
 	Method      string           // HTTP method
 	Handler     http.HandlerFunc // Handler function
-	Middlewares []MiddlewareFunc // Route-specific middlewares
 	Name        string           // Route name for documentation
 	Description string           // Route description for documentation
 	Tags        []string         // Tags for documentation and categorization
@@ -58,10 +60,10 @@ type AuthConfig struct {
 
 // RateLimit defines rate limiting for a route
 type RateLimit struct {
-	Limit    int           // Maximum requests
-	Window   time.Duration // Time window for rate limit
-	PerIP    bool          // Whether limit is per IP
-	KeyFunc  RateLimitKeyFunc // Function to extract key for rate limiting
+	Limit   int              // Maximum requests
+	Window  time.Duration    // Time window for rate limit
+	PerIP   bool             // Whether limit is per IP
+	KeyFunc RateLimitKeyFunc // Function to extract key for rate limiting
 }
 
 // RateLimitKeyFunc extracts a key for rate limiting from a request
@@ -98,17 +100,41 @@ type RouterConfig struct {
 
 // APIDocumentation contains API documentation metadata
 type APIDocumentation struct {
-	Title          string                  // API title
-	Description    string                  // API description
-	Version        string                  // API version
-	Contact        map[string]string       // Contact information
-	TermsOfService string                  // Terms of service URL
-	License        map[string]string       // License information
-	Servers        []map[string]string     // Servers information
-	ExternalDocs   map[string]string       // External documentation
-	Tags           []map[string]string     // API tags
-	SecurityDefs   map[string]interface{}  // Security definitions
-	Components     map[string]interface{}  // Reusable components
+	Title          string
+	Description    string
+	Version        string
+	Contact        *Contact
+	License        *License
+	TermsOfService string
+	ExternalDocs   *ExternalDocs
+	Security       []SecurityScheme
+}
+
+// Contact information for the API
+type Contact struct {
+	Name  string
+	URL   string
+	Email string
+}
+
+// License information for the API
+type License struct {
+	Name string
+	URL  string
+}
+
+// ExternalDocs links to external documentation
+type ExternalDocs struct {
+	Description string
+	URL         string
+}
+
+// SecurityScheme defines API security requirements
+type SecurityScheme struct {
+	Type        string
+	Name        string
+	In          string
+	Description string
 }
 
 // ErrorHandler processes API errors
@@ -122,98 +148,166 @@ type MetricsCollector interface {
 	RecordRateLimit(key string, allowed bool)
 }
 
-// TokenManager handles API token validation
-type TokenManager interface {
-	ValidateToken(token string) (map[string]interface{}, error)
-	GenerateToken(claims map[string]interface{}, expiresIn time.Duration) (string, error)
-	RevokeToken(token string) error
-}
-
-// MiddlewareFunc defines middleware function signature
-type MiddlewareFunc func(http.Handler) http.Handler
-
 // NewRouter creates a new API router
-func NewRouter(config *RouterConfig) *APIRouter {
-	if config == nil {
-		config = defaultRouterConfig()
+func NewRouter(cfg *config.Config, logger *zap.SugaredLogger, metricsCollector *metrics.Collector) *mux.Router {
+	// Create main router
+	router := mux.NewRouter().StrictSlash(true)
+
+	// Create API subrouter with version prefix
+	apiRouter := router.PathPrefix("/api/v1").Subrouter()
+
+	// Register standard middlewares
+	router.Use(LoggingMiddleware(logger))
+
+	if metricsCollector != nil {
+		router.Use(MetricsMiddleware(metricsCollector))
 	}
-	
-	r := &APIRouter{
-		router:      mux.NewRouter(),
-		middlewares: []MiddlewareFunc{},
-		routes:      []*Route{},
-		config:      config,
-		basePath:    config.BasePath,
+
+	// Add rate limiting if enabled
+	if cfg.Security.RateLimiting.Enabled {
+		router.Use(RateLimitMiddleware(cfg.Security.RateLimiting.DefaultLimit))
 	}
-	
-	// Set default error handler
-	r.errorHandler = defaultErrorHandler
-	
-	// Configure default CORS if enabled
-	if config.EnableCORS {
-		if config.CORSOptions != nil {
-			r.defaultCORS = config.CORSOptions
-		} else {
-			r.defaultCORS = defaultCORSOptions()
+
+	// Register health check endpoint
+	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "UP"})
+	})
+
+	// Register API endpoints
+	apiRouter.HandleFunc("/system/status", func(w http.ResponseWriter, r *http.Request) {
+		status := map[string]interface{}{
+			"status":    "operational",
+			"version":   "1.0.0",
+			"timestamp": time.Now().Format(time.RFC3339),
 		}
-	}
-	
-	// Apply base path if specified
-	if config.BasePath != "" {
-		r.router = r.router.PathPrefix(config.BasePath).Subrouter()
-	}
-	
-	return r
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(status)
+	}).Methods("GET")
+
+	// Bridge endpoints
+	bridgeRouter := apiRouter.PathPrefix("/bridge").Subrouter()
+	bridgeRouter.HandleFunc("/status", getBridgeStatus).Methods("GET")
+	bridgeRouter.HandleFunc("/create", createBridgeConnection).Methods("POST")
+	bridgeRouter.HandleFunc("/list", listBridgeConnections).Methods("GET")
+	bridgeRouter.HandleFunc("/{id}", getBridgeConnection).Methods("GET")
+	bridgeRouter.HandleFunc("/{id}", deleteBridgeConnection).Methods("DELETE")
+
+	// Security endpoints
+	securityRouter := apiRouter.PathPrefix("/security").Subrouter()
+	securityRouter.HandleFunc("/config", getSecurityConfig).Methods("GET")
+	securityRouter.HandleFunc("/firewall/rules", getFirewallRules).Methods("GET")
+	securityRouter.HandleFunc("/firewall/rules", createFirewallRule).Methods("POST")
+	securityRouter.HandleFunc("/firewall/rules/{id}", deleteFirewallRule).Methods("DELETE")
+
+	// Monitoring endpoints
+	monitoringRouter := apiRouter.PathPrefix("/monitoring").Subrouter()
+	monitoringRouter.HandleFunc("/metrics", getSystemMetrics).Methods("GET")
+	monitoringRouter.HandleFunc("/alerts", getSystemAlerts).Methods("GET")
+
+	return router
 }
 
-// defaultRouterConfig returns default router configuration
-func defaultRouterConfig() *RouterConfig {
-	return &RouterConfig{
-		EnableCORS:        true,
-		EnableCompression: true,
-		EnableLogging:     true,
-		LogRequests:       true,
-		Timeout:           30 * time.Second,
-		MaxRequestSize:    10 * 1024 * 1024, // 10 MB
-		EnableMetrics:     true,
-		EnableDocs:        true,
-		ValidateRequests:  true,
-		ValidateResponses: false,
-		APIKeyHeader:      "X-API-Key",
-		JWTHeader:         "Authorization",
-	}
+// Helper functions for endpoint handlers
+
+func getBridgeStatus(w http.ResponseWriter, r *http.Request) {
+	// Implementation pending
+	RespondWithJSON(w, http.StatusOK, map[string]string{"status": "operational"})
 }
 
-// defaultCORSOptions returns default CORS options
-func defaultCORSOptions() *CORSOptions {
-	return &CORSOptions{
-		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Content-Type", "Authorization", "X-Requested-With"},
-		ExposedHeaders:   []string{"Content-Length", "Content-Type"},
-		AllowCredentials: true,
-		MaxAge:           86400, // 24 hours
-	}
+func createBridgeConnection(w http.ResponseWriter, r *http.Request) {
+	// Implementation pending
+	RespondWithJSON(w, http.StatusCreated, map[string]string{"id": "bridge-123", "status": "created"})
 }
 
-// defaultErrorHandler provides a default error handling implementation
-func defaultErrorHandler(w http.ResponseWriter, r *http.Request, err error, status int) {
-	response := map[string]interface{}{
-		"error": map[string]interface{}{
-			"status":  status,
-			"message": err.Error(),
-		},
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
-		"path":      r.URL.Path,
+func listBridgeConnections(w http.ResponseWriter, r *http.Request) {
+	// Implementation pending
+	connections := []map[string]string{
+		{"id": "bridge-123", "status": "active"},
+		{"id": "bridge-456", "status": "inactive"},
 	}
-	
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		// If JSON encoding fails, fall back to plain text
-		http.Error(w, fmt.Sprintf("Error: %s", err.Error()), status)
+	RespondWithJSON(w, http.StatusOK, connections)
+}
+
+func getBridgeConnection(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	bridgeID := vars["id"]
+
+	// Implementation pending
+	RespondWithJSON(w, http.StatusOK, map[string]string{
+		"id":     bridgeID,
+		"status": "active",
+	})
+}
+
+func deleteBridgeConnection(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	bridgeID := vars["id"]
+
+	// Implementation pending
+	RespondWithJSON(w, http.StatusOK, map[string]string{
+		"id":     bridgeID,
+		"status": "deleted",
+	})
+}
+
+func getSecurityConfig(w http.ResponseWriter, r *http.Request) {
+	// Implementation pending
+	RespondWithJSON(w, http.StatusOK, map[string]interface{}{
+		"firewall_enabled":      true,
+		"rate_limiting_enabled": true,
+		"ip_masking_enabled":    false,
+	})
+}
+
+func getFirewallRules(w http.ResponseWriter, r *http.Request) {
+	// Implementation pending
+	rules := []map[string]interface{}{
+		{"id": "rule-1", "type": "ip", "action": "allow"},
+		{"id": "rule-2", "type": "ip", "action": "block"},
 	}
+	RespondWithJSON(w, http.StatusOK, rules)
+}
+
+func createFirewallRule(w http.ResponseWriter, r *http.Request) {
+	// Implementation pending
+	RespondWithJSON(w, http.StatusCreated, map[string]string{
+		"id":     "rule-3",
+		"status": "created",
+	})
+}
+
+func deleteFirewallRule(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	ruleID := vars["id"]
+
+	// Implementation pending
+	RespondWithJSON(w, http.StatusOK, map[string]string{
+		"id":     ruleID,
+		"status": "deleted",
+	})
+}
+
+func getSystemMetrics(w http.ResponseWriter, r *http.Request) {
+	// Implementation pending
+	metrics := map[string]interface{}{
+		"cpu_usage":           25.5,
+		"memory_usage":        512,
+		"active_connections":  42,
+		"requests_per_second": 150.5,
+	}
+	RespondWithJSON(w, http.StatusOK, metrics)
+}
+
+func getSystemAlerts(w http.ResponseWriter, r *http.Request) {
+	// Implementation pending
+	alerts := []map[string]interface{}{
+		{"id": "alert-1", "severity": "warning", "message": "High CPU usage"},
+		{"id": "alert-2", "severity": "critical", "message": "Excessive failed login attempts"},
+	}
+	RespondWithJSON(w, http.StatusOK, alerts)
 }
 
 // SetErrorHandler sets a custom error handler
@@ -226,44 +320,25 @@ func (r *APIRouter) SetMetricsCollector(metrics MetricsCollector) {
 	r.metrics = metrics
 }
 
-// SetTokenManager sets a token manager
-func (r *APIRouter) SetTokenManager(tokenManager TokenManager) {
-	r.tokenManager = tokenManager
-}
-
-// UseMiddleware adds a global middleware to the router
-func (r *APIRouter) UseMiddleware(middleware MiddlewareFunc) {
-	r.middlewares = append(r.middlewares, middleware)
-}
-
 // RegisterRoute registers a new API route
 func (r *APIRouter) RegisterRoute(route *Route) error {
-	if route.Path == "" || route.Method == "" || route.Handler == nil {
-		return fmt.Errorf("invalid route: path, method, and handler are required")
+	// Validate route
+	if route.Path == "" {
+		return fmt.Errorf("route path cannot be empty")
 	}
-	
-	// Add to routes list for documentation
+	if route.Method == "" {
+		return fmt.Errorf("route method cannot be empty")
+	}
+	if route.Handler == nil {
+		return fmt.Errorf("route handler cannot be nil")
+	}
+
+	// Create a new route on the router
+	r.router.HandleFunc(route.Path, route.Handler).Methods(route.Method)
+
+	// Store the route for documentation
 	r.routes = append(r.routes, route)
-	
-	// Create handler chain with middlewares
-	var handler http.Handler = route.Handler
-	
-	// Apply route-specific middlewares in reverse order
-	for i := len(route.Middlewares) - 1; i >= 0; i-- {
-		handler = route.Middlewares[i](handler)
-	}
-	
-	// Apply global middlewares in reverse order
-	for i := len(r.middlewares) - 1; i >= 0; i-- {
-		handler = r.middlewares[i](handler)
-	}
-	
-	// Register the route
-	r.router.
-		Methods(route.Method, "OPTIONS").
-		Path(route.Path).
-		Handler(handler)
-	
+
 	return nil
 }
 
@@ -284,15 +359,17 @@ func (r *APIRouter) Handler() http.Handler {
 
 // GenerateDocumentation generates API documentation
 func (r *APIRouter) GenerateDocumentation() APIDocumentation {
-	if r.documentation.Title == "" {
-		r.documentation.Title = "API Documentation"
+	docs := r.documentation
+
+	// Default values if not set
+	if docs.Title == "" {
+		docs.Title = "API Documentation"
 	}
-	
-	if r.documentation.Version == "" {
-		r.documentation.Version = "1.0.0"
+	if docs.Version == "" {
+		docs.Version = "1.0.0"
 	}
-	
-	return r.documentation
+
+	return docs
 }
 
 // SetDocumentation sets API documentation metadata
@@ -329,13 +406,15 @@ func (r *APIRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 // JSON returns a JSON response with the provided status code
 func JSON(w http.ResponseWriter, statusCode int, data interface{}) error {
+	// Set content type
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	
+
+	// Marshal and write the response
 	if data != nil {
 		return json.NewEncoder(w).Encode(data)
 	}
-	
+
 	return nil
 }
 
@@ -345,71 +424,81 @@ func Error(w http.ResponseWriter, r *http.Request, err error, statusCode int, er
 		errorHandler(w, r, err, statusCode)
 		return
 	}
-	
-	// Default error handler
-	defaultErrorHandler(w, r, err, statusCode)
+
+	// Use default JSON error response if no error handler provided
+	JSON(w, statusCode, map[string]string{
+		"error": err.Error(),
+	})
 }
 
 // ExtractBearerToken extracts a Bearer token from the Authorization header
 func ExtractBearerToken(r *http.Request) (string, error) {
+	// Get the Authorization header
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
-		return "", fmt.Errorf("authorization header is missing")
+		return "", fmt.Errorf("no Authorization header found")
 	}
-	
-	parts := strings.Split(authHeader, " ")
-	if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-		return "", fmt.Errorf("authorization header format must be Bearer {token}")
+
+	// Check if it's a Bearer token
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		return "", fmt.Errorf("Authorization header is not a Bearer token")
 	}
-	
-	return parts[1], nil
+
+	// Extract the token
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	if token == "" {
+		return "", fmt.Errorf("Bearer token is empty")
+	}
+
+	return token, nil
 }
 
 // GetIPAddress extracts the client IP address from a request
 func GetIPAddress(r *http.Request, trustedProxies []string) string {
-	// Check X-Forwarded-For header
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// X-Forwarded-For can contain multiple IPs (client, proxy1, proxy2...)
-		ips := strings.Split(xff, ",")
-		
-		// If we have trusted proxies, we need to check them
-		if len(trustedProxies) > 0 {
-			// Start from the rightmost IP and move left
-			for i := len(ips) - 1; i >= 0; i-- {
-				ip := strings.TrimSpace(ips[i])
-				
-				// Check if this IP is a trusted proxy
-				isTrustedProxy := false
-				for _, trusted := range trustedProxies {
-					if ip == trusted {
-						isTrustedProxy = true
-						break
-					}
-				}
-				
-				// If not a trusted proxy, this is the client IP
-				if !isTrustedProxy {
-					return ip
-				}
+	// Check for X-Forwarded-For header
+	if forwardedFor := r.Header.Get("X-Forwarded-For"); forwardedFor != "" {
+		// The X-Forwarded-For header can contain multiple IPs in a comma-separated list:
+		// client, proxy1, proxy2, ...
+		ips := strings.Split(forwardedFor, ",")
+
+		// Get the leftmost IP that isn't a trusted proxy
+		clientIP := strings.TrimSpace(ips[0])
+
+		// Verify it's not a trusted proxy
+		if !isProxyIP(clientIP, trustedProxies) {
+			return clientIP
+		}
+
+		// Otherwise, try to find the first non-proxy IP
+		for i := 1; i < len(ips); i++ {
+			ip := strings.TrimSpace(ips[i])
+			if !isProxyIP(ip, trustedProxies) {
+				return ip
 			}
 		}
-		
-		// If no trusted proxies or all IPs are trusted, return leftmost (client)
-		return strings.TrimSpace(ips[0])
 	}
-	
-	// Check X-Real-IP header
-	if xrip := r.Header.Get("X-Real-IP"); xrip != "" {
-		return xrip
+
+	// Check for X-Real-IP header
+	if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
+		return strings.TrimSpace(realIP)
 	}
-	
+
 	// Fall back to RemoteAddr
-	ip := r.RemoteAddr
-	
-	// Remove port if present
-	if idx := strings.LastIndex(ip, ":"); idx != -1 {
-		ip = ip[:idx]
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		// If there's no port, just use the whole RemoteAddr
+		return r.RemoteAddr
 	}
-	
+
 	return ip
+}
+
+// isProxyIP checks if an IP is in the list of trusted proxies
+func isProxyIP(ip string, trustedProxies []string) bool {
+	for _, proxyIP := range trustedProxies {
+		if ip == proxyIP {
+			return true
+		}
+	}
+	return false
 }

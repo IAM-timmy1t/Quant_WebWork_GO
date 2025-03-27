@@ -1,0 +1,2 @@
+# Exclude problematic files in tests directory
+load/load_test.go

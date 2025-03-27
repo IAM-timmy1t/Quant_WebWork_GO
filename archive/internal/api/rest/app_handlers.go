@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/timot/Quant_WebWork_GO/pkg/models"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/pkg/models"
 )
 
 type registerAppRequest struct {
@@ -154,3 +154,4 @@ func (h *Handler) handleDeleteApp(w http.ResponseWriter, r *http.Request) {
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
+

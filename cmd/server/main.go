@@ -3,316 +3,249 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/api/rest"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/bridge"
 	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/config"
 	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/discovery"
 	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/metrics"
 	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/security"
+	"go.uber.org/zap"
 )
 
+// Application constants
 const (
-	serviceName    = "quant-webwork-server"
-	serviceVersion = "1.0.0"
+	serviceName    = "quant-webwork-go"
+	serviceVersion = "1.2.1"
 )
+
+// Command-line flags
+var (
+	configPath string
+	devMode    bool
+	logLevel   string
+)
+
+func init() {
+	flag.StringVar(&configPath, "config", "./config/config.yaml", "Path to configuration file")
+	flag.BoolVar(&devMode, "dev", false, "Run in development mode")
+	flag.StringVar(&logLevel, "log-level", "info", "Logging level (debug, info, warn, error)")
+}
 
 func main() {
-	// Initialize logger
-	logger := log.New(os.Stdout, "[QUANT] ", log.LstdFlags|log.Lshortfile)
-	logger.Println("Starting Quant WebWork GO Server...")
+	flag.Parse()
 
-	// Load configuration
-	configPath := getConfigPath()
-	configManager, err := setupConfiguration(configPath)
-	if err != nil {
-		logger.Fatalf("Failed to load configuration: %v", err)
+	// Initialize logger
+	var logger *zap.Logger
+	var err error
+
+	if devMode {
+		// Development logger with colorized output and more verbose logging
+		zapConfig := zap.NewDevelopmentConfig()
+		if logLevel != "" {
+			zapConfig.Level.UnmarshalText([]byte(logLevel))
+		}
+		logger, err = zapConfig.Build()
+	} else {
+		// Production logger with structured JSON output
+		zapConfig := zap.NewProductionConfig()
+		if logLevel != "" {
+			zapConfig.Level.UnmarshalText([]byte(logLevel))
+		}
+		logger, err = zapConfig.Build()
 	}
 
-	// Create service context with cancellation
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
+		os.Exit(1)
+	}
+	defer logger.Sync()
+	sugar := logger.Sugar()
+
+	sugar.Infow("Starting Quant WebWork GO Server",
+		"version", serviceVersion,
+		"environment", getEnvironmentName(devMode),
+		"configPath", configPath)
+
+	// Load configuration
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		sugar.Fatalw("Failed to load configuration", "error", err)
+	}
+
+	// Apply environment-based security configuration
+	envType := security.GetEnvironmentType()
+	securityConfig := security.GetSecurityConfig(sugar)
+	sugar.Infow("Security configuration loaded",
+		"environment", envType,
+		"securityLevel", securityConfig.RateLimitingLevel,
+		"authRequired", securityConfig.AuthRequired)
+
+	// Validate security for production environments
+	if envType == security.EnvProduction && !devMode {
+		if err := security.ValidateProductionSecurity(securityConfig); err != nil {
+			sugar.Fatalw("Security validation failed for production", "error", err)
+		}
+	}
+
+	// Initialize metrics collector
+	metricsCollector := metrics.NewCollector(cfg.Monitoring.Metrics, sugar)
+
+	// Start metrics server if enabled
+	if cfg.Monitoring.Metrics.Enabled {
+		metricsServer := metrics.NewServer(cfg.Monitoring.Metrics, metricsCollector, sugar)
+		go func() {
+			if err := metricsServer.Start(); err != nil {
+				sugar.Errorw("Metrics server failed", "error", err)
+			}
+		}()
+	}
+
+	// Initialize discovery service
+	discoveryService, err := discovery.NewService(cfg.Bridge.Discovery, sugar)
+	if err != nil {
+		sugar.Fatalw("Failed to initialize discovery service", "error", err)
+	}
+
+	// Setup bridge manager
+	bridgeManagerConfig := &bridge.ManagerConfig{
+		DefaultTimeout:      time.Second * 30,
+		DefaultRetryCount:   3,
+		DefaultRetryDelay:   time.Second * 5,
+		HealthCheckInterval: time.Second * 60,
+		EventBufferSize:     100,
+		MetricsEnabled:      true,
+	}
+	bridgeManager := bridge.NewManager(bridgeManagerConfig)
+	bridgeManager.SetLogger(sugar)
+	bridgeManager.SetMetricsCollector(metricsCollector)
+
+	// Register protocols based on config
+	for _, protocol := range cfg.Bridge.Protocols {
+		// Simplified - in a real implementation we would create actual protocol adapters
+		sugar.Infow("Registering protocol", "protocol", protocol)
+	}
+
+	// Create context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Initialize core components
-	metricsCollector := setupMetrics(configManager)
-	securityMonitor := setupSecurity(configManager, metricsCollector)
-	discoveryService := setupDiscovery(configManager, serviceName, serviceVersion)
-
-	// Start API server
-	serverPort, _ := configManager.GetInt("server.port")
-	if serverPort == 0 {
-		serverPort = 8080 // Default port
+	// Start bridge manager
+	sugar.Info("Starting bridge manager")
+	if err := bridgeManager.Start(ctx); err != nil {
+		sugar.Fatalw("Failed to start bridge manager", "error", err)
 	}
-	
-	server := setupServer(serverPort, metricsCollector, securityMonitor)
-
-	// Handle graceful shutdown
-	go func() {
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-		<-sigChan
-
-		logger.Println("Shutting down server...")
-		
-		// Create shutdown context with timeout
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer shutdownCancel()
-		
-		// Shutdown HTTP server
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			logger.Printf("Server shutdown error: %v", err)
+	defer func() {
+		sugar.Info("Stopping bridge manager")
+		if err := bridgeManager.Stop(); err != nil {
+			sugar.Errorw("Error stopping bridge manager", "error", err)
 		}
-		
-		// Deregister from service discovery
-		if discoveryService != nil {
-			discoveryService.Deregister(serviceName)
-		}
-		
-		// Signal the main context to cancel
-		cancel()
 	}()
 
-	// Start the server
-	logger.Printf("Server listening on port %d", serverPort)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		logger.Fatalf("Server error: %v", err)
-	}
-
-	// Wait for context cancellation (from the shutdown goroutine)
-	<-ctx.Done()
-	logger.Println("Server shutdown complete")
-}
-
-func getConfigPath() string {
-	// Check environment variable first
-	configPath := os.Getenv("QUANT_CONFIG_PATH")
-	if configPath != "" {
-		return configPath
-	}
-	
-	// Check command line arguments
-	if len(os.Args) > 1 {
-		return os.Args[1]
-	}
-	
-	// Default config path
-	return "./config/config.json"
-}
-
-func setupConfiguration(configPath string) (*config.Manager, error) {
-	manager := config.NewManager()
-	
-	// Create file provider
-	fileProvider, err := config.NewFileProvider(configPath, true)
+	// Create security monitor with the correct config type
+	monitorConfig := security.DefaultConfig()
+	securityMonitor, err := security.NewMonitor(monitorConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create config provider: %w", err)
+		sugar.Fatalw("Failed to initialize security monitor", "error", err)
 	}
-	
-	// Register provider
-	if err := manager.RegisterProvider("file", fileProvider); err != nil {
-		return nil, fmt.Errorf("failed to register config provider: %w", err)
-	}
-	
-	// Load configuration
-	if err := fileProvider.Load(); err != nil {
-		return nil, fmt.Errorf("failed to load configuration: %w", err)
-	}
-	
-	return manager, nil
-}
+	defer securityMonitor.Close()
 
-func setupMetrics(configManager *config.Manager) *metrics.Collector {
-	// Create metrics collector with default config
-	config := &metrics.Config{
-		BatchSize:     100,
-		FlushInterval: 10 * time.Second,
-		// Use default values for other fields
-	}
-	
-	collector := metrics.NewCollector(config)
-	
-	// Initialize and start the collector
-	// Create a background context
-	ctx := context.Background()
-	if err := collector.Start(ctx); err != nil {
-		log.Printf("Error starting metrics collector: %v", err)
-	}
-	
-	return collector
-}
+	// Setup API router
+	sugar.Info("Initializing API router")
+	router := rest.NewRouter(cfg, sugar, metricsCollector)
 
-func setupSecurity(configManager *config.Manager, metricsCollector *metrics.Collector) *security.Monitor {
-	// Create security components
-	riskAnalyzer := security.NewRiskAnalyzer(configManager)
-	eventProcessor := security.NewEventProcessor(metricsCollector)
-	alertManager := security.NewAlertManager()
-	
-	// Create security monitor
-	monitor := security.NewMonitor(riskAnalyzer, eventProcessor, alertManager)
-	
-	// Register detectors
-	bruteForceDetector := security.NewBruteForceDetector(configManager)
-	anomalyDetector := security.NewAnomalyDetector(metricsCollector)
-	vulnerabilityDetector := security.NewVulnerabilityDetector()
-	
-	monitor.RegisterDetector(bruteForceDetector)
-	monitor.RegisterDetector(anomalyDetector)
-	monitor.RegisterDetector(vulnerabilityDetector)
-	
-	// Start monitoring
-	monitor.Start()
-	
-	return monitor
-}
-
-func setupDiscovery(configManager *config.Manager, serviceName, serviceVersion string) discovery.Registry {
-	// Create health checker with default timeout
-	healthChecker := discovery.NewHealthChecker(5 * time.Second)
-	
-	// Create service registry
-	registry := discovery.NewRegistry(healthChecker)
-	
-	// Set registry reference in health checker
-	healthChecker.SetRegistry(registry)
-	
-	// Read service host/port from config
-	serviceHost, _ := configManager.GetString("service.host")
-	servicePort, _ := configManager.GetInt("service.port")
-	
-	if serviceHost == "" {
-		serviceHost = "localhost"
-	}
-	
-	if servicePort == 0 {
-		servicePort = 8080 // Default port
-	}
-	
-	// Register this service
-	serviceAddress := fmt.Sprintf("%s:%d", serviceHost, servicePort)
-	serviceID := fmt.Sprintf("%s-%s", serviceName, serviceVersion)
-	
-	instance := &discovery.ServiceInstance{
-		ID:      serviceID,
-		Name:    serviceName,
-		Version: serviceVersion,
-		Address: serviceAddress,
-		Status:  discovery.StatusStarting,
-		Tags:    []string{"api", "core"},
-		Weight:  100,
-	}
-	
-	options := &discovery.RegistrationOptions{
-		TTL:                 discovery.DefaultTTL,
-		AutoRenew:           true,
-		HealthCheckInterval: 15 * time.Second,
-		InitialStatus:       discovery.StatusStarting,
-	}
-	
-	if err := registry.Register(instance, options); err != nil {
-		log.Printf("Failed to register service: %v", err)
-		return nil
-	}
-	
-	// Update status to UP after initialization
-	registry.UpdateStatus(serviceID, discovery.StatusUp)
-	
-	return registry
-}
-
-func setupServer(port int, metricsCollector *metrics.Collector, securityMonitor *security.Monitor) *http.Server {
-	// Create router
-	mux := http.NewServeMux()
-	
-	// Add health check endpoint
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"UP"}`))
-	})
-	
-	// Add metrics endpoint
-	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		// TODO: Implement metrics reporting
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"metrics":"enabled"}`))
-	})
-	
-	// Create security middleware
-	securityMiddleware := func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Create security event
-			event := security.Event{
-				Type:        security.EventTypeRequest,
-				Timestamp:   time.Now(),
-				ClientIP:    r.RemoteAddr,
-				RequestPath: r.URL.Path,
-				// Add more context from the request if needed
-			}
-			
-			// Process security event (non-blocking)
-			go securityMonitor.ProcessEvent(r.Context(), event)
-			
-			// Continue with the request
-			next.ServeHTTP(w, r)
-		})
-	}
-	
-	// Create metrics middleware
-	metricsMiddleware := func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			startTime := time.Now()
-			
-			// Wrap response writer to capture status code
-			wrapper := newResponseWriter(w)
-			
-			// Process the request
-			next.ServeHTTP(wrapper, r)
-			
-			// Record metrics
-			duration := time.Since(startTime)
-			metricsCollector.RecordMetric("http.request.duration", r.URL.Path, float64(duration.Milliseconds()), map[string]string{
-				"method": r.Method,
-				"status": fmt.Sprintf("%d", wrapper.status),
-			})
-		})
-	}
-	
-	// Create server with middlewares
-	var handler http.Handler = mux
-	handler = securityMiddleware(handler)
-	handler = metricsMiddleware(handler)
-	
+	// Configure HTTP server
 	server := &http.Server{
-		Addr:         fmt.Sprintf(":%d", port),
-		Handler:      handler,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:         fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
+		Handler:      router,
+		ReadTimeout:  cfg.Server.ReadTimeout,
+		WriteTimeout: cfg.Server.WriteTimeout,
+		IdleTimeout:  cfg.Server.ShutdownTimeout,
 	}
-	
-	return server
+
+	// Start server in a goroutine
+	go func() {
+		sugar.Infow("Starting HTTP server", "address", server.Addr)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			sugar.Fatalw("Server failed", "error", err)
+		}
+	}()
+
+	// Register service with discovery service if enabled
+	if cfg.Bridge.Discovery.Enabled {
+		svcID := registerWithDiscovery(discoveryService, cfg, sugar)
+		defer func() {
+			if err := discoveryService.UnregisterService(svcID); err != nil {
+				sugar.Errorw("Failed to unregister service", "error", err)
+			}
+		}()
+	}
+
+	// Handle graceful shutdown
+	stopCh := make(chan os.Signal, 1)
+	signal.Notify(stopCh, syscall.SIGINT, syscall.SIGTERM)
+	<-stopCh
+	sugar.Info("Received shutdown signal")
+
+	// Create context with timeout for shutdown
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
+	defer shutdownCancel()
+
+	// Shutdown HTTP server
+	sugar.Info("Shutting down HTTP server")
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		sugar.Errorw("Server forced to shutdown", "error", err)
+	}
+
+	sugar.Info("Server gracefully stopped")
 }
 
-// responseWriter wraps http.ResponseWriter to capture status code
-type responseWriter struct {
-	http.ResponseWriter
-	status int
+// getEnvironmentName returns a human-readable environment name
+func getEnvironmentName(devMode bool) string {
+	if devMode {
+		return "development"
+	}
+
+	env := os.Getenv("QUANT_ENV")
+	switch env {
+	case "prod", "production":
+		return "production"
+	case "staging":
+		return "staging"
+	case "test", "testing":
+		return "testing"
+	default:
+		return "production" // Default to production if not specified
+	}
 }
 
-func newResponseWriter(w http.ResponseWriter) *responseWriter {
-	return &responseWriter{w, http.StatusOK}
+// registerWithDiscovery registers the service with the discovery service
+func registerWithDiscovery(discoveryService *discovery.BridgeDiscovery, cfg *config.Config, logger *zap.SugaredLogger) string {
+	svc := &discovery.Service{
+		ID:          fmt.Sprintf("%s-%d", serviceName, os.Getpid()),
+		Name:        serviceName,
+		Protocol:    "http",
+		Host:        cfg.Server.Host,
+		Port:        cfg.Server.Port,
+		HealthCheck: "/health",
+		Metadata: map[string]string{
+			"version": serviceVersion,
+		},
+		Status: "available",
+	}
+
+	if err := discoveryService.RegisterService(svc); err != nil {
+		logger.Errorw("Failed to register with discovery service", "error", err)
+		return ""
+	}
+
+	logger.Infow("Registered with discovery service", "serviceID", svc.ID)
+	return svc.ID
 }
-
-func (rw *responseWriter) WriteHeader(code int) {
-	rw.status = code
-	rw.ResponseWriter.WriteHeader(code)
-}
-
-
-

@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/timot/Quant_WebWork_GO/internal/dashboard"
-	"github.com/timot/Quant_WebWork_GO/internal/monitoring"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/dashboard"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/monitoring"
 )
 
 // DashboardHandler handles dashboard-related HTTP requests
@@ -333,3 +333,4 @@ func (h *DashboardHandler) parseTimeRange(r *http.Request) (time.Time, time.Time
 
 	return start, end, nil
 }
+

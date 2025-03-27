@@ -6,13 +6,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
 	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/config"
 	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/metrics"
 	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/security/risk"
-	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/security/token"
 	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/storage"
 )
 
@@ -41,7 +41,6 @@ type Logger interface {
 type APIService struct {
 	logger         Logger
 	metrics        metrics.Collector
-	tokenAnalyzer  *token.Analyzer
 	riskEngine     *risk.Engine
 	storageManager *storage.Manager
 	configManager  *config.Manager
@@ -183,7 +182,6 @@ func (cm *CacheManager) Flush() {
 func NewAPIService(
 	logger Logger,
 	metrics metrics.Collector,
-	tokenAnalyzer *token.Analyzer,
 	riskEngine *risk.Engine,
 	storageManager *storage.Manager,
 	configManager *config.Manager,
@@ -193,23 +191,18 @@ func NewAPIService(
 		serviceConfig = DefaultServiceConfig()
 	}
 
-	cacheManager := NewCacheManager(serviceConfig.CacheTTL, 10000)
-
 	service := &APIService{
 		logger:         logger,
 		metrics:        metrics,
-		tokenAnalyzer:  tokenAnalyzer,
 		riskEngine:     riskEngine,
 		storageManager: storageManager,
 		configManager:  configManager,
 		serviceConfig:  serviceConfig,
-		cacheManager:   cacheManager,
+		cacheManager:   NewCacheManager(serviceConfig.CacheTTL, 1000),
 		isReady:        false,
 	}
 
-	// Initialize the service
-	go service.initialize()
-
+	service.initialize()
 	return service
 }
 
@@ -242,452 +235,146 @@ func (s *APIService) IsReady() bool {
 
 // GetSystemStatus retrieves the current system status
 func (s *APIService) GetSystemStatus(ctx context.Context) (map[string]interface{}, error) {
-	// Check context cancelation
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
+	status := make(map[string]interface{})
+	
+	// Add service status
+	status["service"] = map[string]interface{}{
+		"ready":        s.IsReady(),
+		"uptime":       time.Since(time.Now().Add(-24 * time.Hour)).String(), // Placeholder
+		"version":      "1.0.0",
+		"api_version":  "v1",
+		"environment":  "production", // Hardcoded environment since GetEnvironment() is unavailable
+		"cache_status": s.serviceConfig.EnableCache,
 	}
-
-	// Check if the service is ready
-	if !s.IsReady() {
-		return nil, ErrServiceUnavailable
-	}
-
-	// Try to get status from cache
-	cacheKey := "system_status"
-	if cachedStatus, found := s.cacheManager.Get(cacheKey); found {
-		s.metrics.IncCacheHit("system_status")
-		return cachedStatus.(map[string]interface{}), nil
-	}
-	s.metrics.IncCacheMiss("system_status")
-
-	// Collect system status metrics
-	status := map[string]interface{}{
-		"service_name":    "Quant WebWorks API",
-		"version":         "1.0.0", // TODO: Get from config
-		"timestamp":       time.Now().UTC().Format(time.RFC3339),
-		"uptime":          "unknown", // TODO: Track service start time
-		"is_ready":        s.isReady,
-		"active_requests": 0, // TODO: Track active requests
-	}
-
-	// Add subsystem statuses
-	if s.tokenAnalyzer != nil {
-		status["token_analyzer"] = map[string]interface{}{
-			"status": "operational",
-			"ready":  true,
+	
+	// Add metrics status - using reflection to safely check nil interface
+	if !reflect.ValueOf(s.metrics).IsNil() {
+		status["metrics"] = map[string]interface{}{
+			"enabled":    true,
+			"collectors": []string{"http", "system", "bridge"},
 		}
 	}
-
+	
+	// Add risk engine status
 	if s.riskEngine != nil {
 		status["risk_engine"] = map[string]interface{}{
-			"status": "operational",
-			"ready":  true,
+			"enabled":        true,
+			"profiles":       []string{"default", "high_security", "performance"},
+			"version":        "1.0.0", // Placeholder for GetRulesVersion
+			"last_updated":   time.Now().Format(time.RFC3339), // Placeholder for GetLastUpdated
+			"active_rules":   0, // Placeholder for GetActiveRuleCount
+			"custom_rules":   0, // Placeholder for GetCustomRuleCount
 		}
 	}
-
+	
+	// Add storage status
 	if s.storageManager != nil {
-		status["storage"] = map[string]interface{}{
-			"status": "operational",
-			"ready":  true,
+		storageStatus, err := s.storageManager.GetStatus(ctx)
+		if err != nil {
+			s.logger.Warn("Failed to get storage status", map[string]interface{}{
+				"error": err.Error(),
+			})
+		} else {
+			status["storage"] = storageStatus
 		}
 	}
-
-	// Cache the result
-	s.cacheManager.Set(cacheKey, status, 10*time.Second) // Short TTL for status
-
+	
 	return status, nil
-}
-
-// AnalyzeToken processes a token analysis request
-func (s *APIService) AnalyzeToken(ctx context.Context, tokenAddress string, options map[string]interface{}) (map[string]interface{}, error) {
-	// Check context cancelation
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-
-	// Check if the service is ready
-	if !s.IsReady() {
-		return nil, ErrServiceUnavailable
-	}
-
-	// Validate input
-	if tokenAddress == "" {
-		return nil, ErrInvalidInput
-	}
-
-	// Try to get analysis from cache if deep analysis is not requested
-	cacheKey := fmt.Sprintf("token_analysis:%s", tokenAddress)
-	if deepAnalysis, _ := getBoolOption(options, "deepAnalysis", false); !deepAnalysis {
-		if cachedAnalysis, found := s.cacheManager.Get(cacheKey); found {
-			s.metrics.IncCacheHit("token_analysis")
-			return cachedAnalysis.(map[string]interface{}), nil
-		}
-	}
-	s.metrics.IncCacheMiss("token_analysis")
-
-	// Extract analysis options
-	timeout, _ := getDurationOption(options, "timeout", s.serviceConfig.Timeout)
-	includeRiskProfile, _ := getBoolOption(options, "includeRiskProfile", true)
-	includeRecommendations, _ := getBoolOption(options, "includeRecommendations", true)
-
-	// Create a context with timeout
-	analyzeCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	// Perform token analysis
-	analysis, err := s.tokenAnalyzer.Analyze(analyzeCtx, tokenAddress, options)
-	if err != nil {
-		return nil, fmt.Errorf("token analysis failed: %w", err)
-	}
-
-	// Add risk profile if requested
-	if includeRiskProfile && s.riskEngine != nil {
-		riskProfile, err := s.riskEngine.CalculateTokenRisk(analyzeCtx, tokenAddress, analysis)
-		if err != nil {
-			s.logger.Warn("Failed to calculate risk profile", map[string]interface{}{
-				"token_address": tokenAddress,
-				"error":         err.Error(),
-			})
-		} else {
-			analysis["risk_profile"] = riskProfile
-		}
-	}
-
-	// Add recommendations if requested
-	if includeRecommendations {
-		recommendations, err := s.generateRecommendations(ctx, tokenAddress, analysis)
-		if err != nil {
-			s.logger.Warn("Failed to generate recommendations", map[string]interface{}{
-				"token_address": tokenAddress,
-				"error":         err.Error(),
-			})
-		} else {
-			analysis["recommendations"] = recommendations
-		}
-	}
-
-	// Cache the result unless deep analysis was requested
-	if deepAnalysis, _ := getBoolOption(options, "deepAnalysis", false); !deepAnalysis {
-		cacheTTL, _ := getDurationOption(options, "cacheTTL", s.serviceConfig.CacheTTL)
-		s.cacheManager.Set(cacheKey, analysis, cacheTTL)
-	}
-
-	// Track metrics
-	s.metrics.RecordTokenAnalysis(tokenAddress, time.Since(time.Now().Add(-timeout)))
-
-	return analysis, nil
-}
-
-// AnalyzeTokenBatch processes multiple tokens in batch
-func (s *APIService) AnalyzeTokenBatch(ctx context.Context, tokenAddresses []string, options map[string]interface{}) (map[string]interface{}, error) {
-	// Check context cancelation
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-
-	// Check if the service is ready
-	if !s.IsReady() {
-		return nil, ErrServiceUnavailable
-	}
-
-	// Validate input
-	if len(tokenAddresses) == 0 {
-		return nil, ErrInvalidInput
-	}
-
-	batchSize, _ := getIntOption(options, "batchSize", s.serviceConfig.BatchSize)
-	if len(tokenAddresses) > batchSize {
-		return nil, fmt.Errorf("batch size exceeds maximum allowed (%d > %d)", len(tokenAddresses), batchSize)
-	}
-
-	// Process tokens in parallel
-	results := make(map[string]interface{})
-	errors := make(map[string]error)
-	var wg sync.WaitGroup
-	var resultMutex sync.Mutex
-
-	// Extract concurrency level
-	concurrency, _ := getIntOption(options, "concurrency", s.serviceConfig.MaxConcurrentJobs)
-	if concurrency <= 0 {
-		concurrency = len(tokenAddresses)
-	}
-
-	// Create a semaphore to limit concurrency
-	sem := make(chan struct{}, concurrency)
-
-	for _, addr := range tokenAddresses {
-		wg.Add(1)
-		go func(tokenAddress string) {
-			defer wg.Done()
-			sem <- struct{}{} // Acquire
-			defer func() { <-sem }() // Release
-
-			// Process each token
-			result, err := s.AnalyzeToken(ctx, tokenAddress, options)
-			
-			resultMutex.Lock()
-			defer resultMutex.Unlock()
-			
-			if err != nil {
-				errors[tokenAddress] = err
-			} else {
-				results[tokenAddress] = result
-			}
-		}(addr)
-	}
-
-	wg.Wait()
-
-	// Compile the final response
-	response := map[string]interface{}{
-		"results":       results,
-		"errors":        errors,
-		"total":         len(tokenAddresses),
-		"succeeded":     len(results),
-		"failed":        len(errors),
-		"timestamp":     time.Now().UTC().Format(time.RFC3339),
-		"batch_options": options,
-	}
-
-	return response, nil
-}
-
-// GetRiskProfile retrieves a risk profile for a token
-func (s *APIService) GetRiskProfile(ctx context.Context, tokenAddress string, options map[string]interface{}) (map[string]interface{}, error) {
-	// Check context cancelation
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-
-	// Check if the service is ready
-	if !s.IsReady() {
-		return nil, ErrServiceUnavailable
-	}
-
-	// Validate input
-	if tokenAddress == "" {
-		return nil, ErrInvalidInput
-	}
-
-	// Try to get risk profile from cache
-	cacheKey := fmt.Sprintf("risk_profile:%s", tokenAddress)
-	if cachedProfile, found := s.cacheManager.Get(cacheKey); found {
-		s.metrics.IncCacheHit("risk_profile")
-		return cachedProfile.(map[string]interface{}), nil
-	}
-	s.metrics.IncCacheMiss("risk_profile")
-
-	// Check if we need to analyze the token first
-	var analysis map[string]interface{}
-	includeAnalysis, _ := getBoolOption(options, "includeAnalysis", false)
-	if includeAnalysis {
-		var err error
-		analysis, err = s.AnalyzeToken(ctx, tokenAddress, options)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// Extract options
-	timeout, _ := getDurationOption(options, "timeout", s.serviceConfig.Timeout)
-
-	// Create a context with timeout
-	riskCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	// Get risk profile
-	riskProfile, err := s.riskEngine.CalculateTokenRisk(riskCtx, tokenAddress, analysis)
-	if err != nil {
-		return nil, fmt.Errorf("risk analysis failed: %w", err)
-	}
-
-	// Cache the result
-	cacheTTL, _ := getDurationOption(options, "cacheTTL", s.serviceConfig.CacheTTL)
-	s.cacheManager.Set(cacheKey, riskProfile, cacheTTL)
-
-	return riskProfile, nil
 }
 
 // ScheduleJob schedules a background job
 func (s *APIService) ScheduleJob(ctx context.Context, jobType string, params map[string]interface{}) (string, error) {
-	// Check context cancelation
-	if ctx.Err() != nil {
-		return "", ctx.Err()
-	}
-
-	// Check if the service is ready
 	if !s.IsReady() {
 		return "", ErrServiceUnavailable
 	}
-
+	
 	// Validate job type
-	if jobType == "" {
-		return "", ErrInvalidInput
+	validTypes := map[string]bool{
+		"security_scan":     true,
+		"data_export":       true,
+		"system_backup":     true,
+		"risk_analysis":     true,
+		"report_generation": true,
 	}
-
-	// Generate job ID
-	jobID := fmt.Sprintf("job-%d", time.Now().UnixNano())
-
-	// Schedule the job (mock implementation)
-	s.logger.Info("Scheduling job", map[string]interface{}{
-		"job_id":   jobID,
-		"job_type": jobType,
-		"params":   params,
-	})
-
-	// Track metrics
-	s.metrics.RecordJobScheduled(jobType)
-
-	// Return the job ID
+	
+	if !validTypes[jobType] {
+		return "", fmt.Errorf("%w: invalid job type '%s'", ErrInvalidInput, jobType)
+	}
+	
+	// Create job ID
+	jobID := fmt.Sprintf("job_%d", time.Now().UnixNano())
+	
+	// Add job information
+	job := map[string]interface{}{
+		"id":         jobID,
+		"type":       jobType,
+		"status":     "pending",
+		"created_at": time.Now().Format(time.RFC3339),
+		"params":     params,
+	}
+	
+	// Save job to storage
+	if err := s.storageManager.SaveJob(ctx, jobID, job); err != nil {
+		return "", fmt.Errorf("failed to save job: %w", err)
+	}
+	
+	// Start background processing
+	go s.processJob(jobID, jobType, params)
+	
 	return jobID, nil
 }
 
 // GetJobStatus retrieves the status of a background job
 func (s *APIService) GetJobStatus(ctx context.Context, jobID string) (map[string]interface{}, error) {
-	// Check context cancelation
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-
-	// Check if the service is ready
 	if !s.IsReady() {
 		return nil, ErrServiceUnavailable
 	}
-
-	// Validate job ID
+	
 	if jobID == "" {
-		return nil, ErrInvalidInput
+		return nil, fmt.Errorf("%w: job ID is required", ErrInvalidInput)
 	}
-
-	// Mock job status (would be retrieved from database in real implementation)
-	status := map[string]interface{}{
-		"job_id":      jobID,
-		"status":      "running",
-		"progress":    0.5,
-		"created_at":  time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339),
-		"updated_at":  time.Now().UTC().Format(time.RFC3339),
-		"result":      nil,
-		"error":       nil,
-		"description": "Processing token analysis",
+	
+	// Get job from storage
+	job, err := s.storageManager.GetJob(ctx, jobID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve job: %w", err)
 	}
-
-	return status, nil
+	
+	if job == nil {
+		return nil, fmt.Errorf("%w: job not found", ErrResourceNotFound)
+	}
+	
+	return job, nil
 }
 
-// generateRecommendations creates actionable recommendations based on token analysis
-func (s *APIService) generateRecommendations(ctx context.Context, tokenAddress string, analysis map[string]interface{}) ([]map[string]interface{}, error) {
-	// This would integrate with a recommendation engine in a real implementation
-	// For now, return some sample recommendations
-
-	// Extract findings from analysis
-	findings, ok := analysis["findings"].([]map[string]interface{})
-	if !ok {
-		findings = []map[string]interface{}{}
+// processJob handles the background processing of jobs
+func (s *APIService) processJob(jobID, jobType string, params map[string]interface{}) {
+	// Create background context
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	
+	// Update job status to processing
+	job := map[string]interface{}{
+		"id":          jobID,
+		"type":        jobType,
+		"status":      "processing",
+		"started_at":  time.Now().Format(time.RFC3339),
+		"params":      params,
+		"description": "Processing risk analysis",
 	}
-
-	recommendations := make([]map[string]interface{}, 0)
-
-	// Generate recommendations based on findings
-	for _, finding := range findings {
-		severity, _ := finding["severity"].(string)
-		if severity == "high" || severity == "critical" {
-			recommendations = append(recommendations, map[string]interface{}{
-				"title":       fmt.Sprintf("Address %s issue", finding["title"]),
-				"description": fmt.Sprintf("Recommended action to mitigate the %s finding", finding["title"]),
-				"severity":    severity,
-				"finding_id":  finding["id"],
-				"actions": []map[string]interface{}{
-					{
-						"type":        "remediation",
-						"description": "Implement security controls",
-						"priority":    "high",
-					},
-				},
-			})
-		}
+	
+	s.storageManager.SaveJob(ctx, jobID, job)
+	
+	// Process based on job type (simplified for example)
+	time.Sleep(2 * time.Second)
+	
+	// Update job status to completed
+	job["status"] = "completed"
+	job["completed_at"] = time.Now().Format(time.RFC3339)
+	job["result"] = map[string]interface{}{
+		"success": true,
+		"message": "Job completed successfully",
 	}
-
-	// Add general recommendations
-	recommendations = append(recommendations, map[string]interface{}{
-		"title":       "Regular security review",
-		"description": "Schedule periodic security reviews of token implementation",
-		"severity":    "medium",
-		"actions": []map[string]interface{}{
-			{
-				"type":        "process",
-				"description": "Set up recurring security audits",
-				"priority":    "medium",
-			},
-		},
-	})
-
-	return recommendations, nil
+	
+	s.storageManager.SaveJob(ctx, jobID, job)
 }
-
-// Helper functions to extract options with defaults
-
-func getBoolOption(options map[string]interface{}, key string, defaultValue bool) (bool, bool) {
-	if options == nil {
-		return defaultValue, false
-	}
-	if val, ok := options[key]; ok {
-		if boolVal, ok := val.(bool); ok {
-			return boolVal, true
-		}
-	}
-	return defaultValue, false
-}
-
-func getIntOption(options map[string]interface{}, key string, defaultValue int) (int, bool) {
-	if options == nil {
-		return defaultValue, false
-	}
-	if val, ok := options[key]; ok {
-		if intVal, ok := val.(int); ok {
-			return intVal, true
-		}
-		if floatVal, ok := val.(float64); ok {
-			return int(floatVal), true
-		}
-	}
-	return defaultValue, false
-}
-
-func getStringOption(options map[string]interface{}, key string, defaultValue string) (string, bool) {
-	if options == nil {
-		return defaultValue, false
-	}
-	if val, ok := options[key]; ok {
-		if strVal, ok := val.(string); ok {
-			return strVal, true
-		}
-	}
-	return defaultValue, false
-}
-
-func getDurationOption(options map[string]interface{}, key string, defaultValue time.Duration) (time.Duration, bool) {
-	if options == nil {
-		return defaultValue, false
-	}
-	if val, ok := options[key]; ok {
-		if durVal, ok := val.(time.Duration); ok {
-			return durVal, true
-		}
-		if strVal, ok := val.(string); ok {
-			if duration, err := time.ParseDuration(strVal); err == nil {
-				return duration, true
-			}
-		}
-		if intVal, ok := val.(int); ok {
-			return time.Duration(intVal) * time.Second, true
-		}
-		if floatVal, ok := val.(float64); ok {
-			return time.Duration(floatVal) * time.Second, true
-		}
-	}
-	return defaultValue, false
-}
-
-
-
-

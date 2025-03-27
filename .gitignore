@@ -12,8 +12,11 @@
 # Output of the go coverage tool
 *.out
 
-# Dependency directories (remove the comment below to include it)
-vendor/
+# Temporarily exclude vendor directory until vendoring issues are resolved
+/vendor/
+
+# Exclude archive directory that contains incompatible import paths
+/archive/
 
 # Go workspace file
 go.work

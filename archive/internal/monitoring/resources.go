@@ -12,8 +12,8 @@ import (
 	"github.com/shirou/gopsutil/v3/mem"
 	"github.com/shirou/gopsutil/v3/net"
 	"github.com/shirou/gopsutil/v3/process"
-	"github.com/timot/Quant_WebWork_GO/internal/storage"
-	"github.com/timot/Quant_WebWork_GO/internal/tracing"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/storage"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/tracing"
 )
 
 // ResourceConfig defines configuration for resource monitoring
@@ -464,3 +464,4 @@ func (rm *ResourceMonitor) notifySubscribers(metrics ResourceMetrics) {
 		}
 	}
 }
+

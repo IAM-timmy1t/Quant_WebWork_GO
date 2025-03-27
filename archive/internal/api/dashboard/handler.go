@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/timot/Quant_WebWork_GO/internal/auth"
-	"github.com/timot/Quant_WebWork_GO/internal/discovery"
-	"github.com/timot/Quant_WebWork_GO/internal/integration"
-	"github.com/timot/Quant_WebWork_GO/internal/proxy"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/auth"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/discovery"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/integration"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/proxy"
 )
 
 // Handler manages dashboard API endpoints
@@ -333,3 +333,4 @@ func (h *Handler) getSystemConfig() SystemConfig {
 		Metrics: h.metrics.GetConfig(),
 	}
 }
+

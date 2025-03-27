@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/timot/Quant_WebWork_GO/internal/auth"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/auth"
 )
 
 // Handler represents the REST API handler
@@ -92,3 +92,4 @@ func respondJSON(w http.ResponseWriter, status int, data interface{}) {
 func respondError(w http.ResponseWriter, status int, message string) {
 	respondJSON(w, status, map[string]string{"error": message})
 }
+

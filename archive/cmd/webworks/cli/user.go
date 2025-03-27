@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/timot/Quant_WebWork_GO/internal/auth"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/auth"
 )
 
 func init() {
@@ -216,3 +216,4 @@ var userRolesCmd = &cobra.Command{
 		w.Flush()
 	},
 }
+

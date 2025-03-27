@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/timot/Quant_WebWork_GO/internal/auth"
-	"github.com/timot/Quant_WebWork_GO/internal/config"
-	"github.com/timot/Quant_WebWork_GO/internal/monitoring"
-	"github.com/timot/Quant_WebWork_GO/pkg/models"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/auth"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/config"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/monitoring"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/pkg/models"
 )
 
 const (
@@ -209,3 +209,4 @@ func (h *UploadHandler) deployProject(project *models.Project) error {
 	// 4. Starting necessary services
 	return nil
 }
+

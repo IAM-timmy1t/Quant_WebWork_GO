@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/timot/Quant_WebWork_GO/internal/monitoring"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/monitoring"
 )
 
 func init() {
@@ -254,3 +254,4 @@ var monitorWatchCmd = &cobra.Command{
 		}
 	},
 }
+

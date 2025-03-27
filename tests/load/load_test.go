@@ -14,9 +14,9 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
-	"github.com/timot/Quant_WebWork_GO/QUANT_WW_GO/internal/bridge/adapters"
-	"github.com/timot/Quant_WebWork_GO/QUANT_WW_GO/internal/core/config"
-	"github.com/timot/Quant_WebWork_GO/QUANT_WW_GO/internal/core/metrics"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/bridge/adapters"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/config"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/core/metrics"
 )
 
 // TestConfig holds configuration for load tests

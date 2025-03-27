@@ -1,0 +1,3 @@
+# Exclude archive directory completely
+/archive/
+/archive/**/*

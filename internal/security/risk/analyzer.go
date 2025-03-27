@@ -16,7 +16,6 @@ type Analyzer struct {
     patterns       []Pattern
     factors        map[string]Factor
     contextData    map[string]interface{}
-    tokenAnalyzer  *TokenAnalyzer
     mu             sync.RWMutex
     historicalRisk map[string][]RiskDataPoint
 }
@@ -66,17 +65,6 @@ func (a *Analyzer) CalculateRisk(ctx context.Context, event security.Event) int 
     }
     riskScore *= severityMultiplier
 
-    // Apply token-specific risk factors if token context exists
-    if event.TokenContext != nil && len(event.TokenContext) > 0 && a.tokenAnalyzer != nil {
-        // Convert TokenContext to string for analysis if needed
-        tokenContextStr := ""
-        if tokenID, ok := event.TokenContext["token_id"].(string); ok {
-            tokenContextStr = tokenID
-        }
-        tokenRisk := a.tokenAnalyzer.AnalyzeTokenRisk(tokenContextStr, event.RawData)
-        riskScore += tokenRisk
-    }
-
     // Check for pattern matches
     for _, pattern := range a.patterns {
         if pattern.Matches(event) {
@@ -114,11 +102,6 @@ func (a *Analyzer) AddPattern(pattern Pattern) {
     defer a.mu.Unlock()
     
     a.patterns = append(a.patterns, pattern)
-}
-
-// SetTokenAnalyzer sets the token analyzer
-func (a *Analyzer) SetTokenAnalyzer(analyzer *TokenAnalyzer) {
-    a.tokenAnalyzer = analyzer
 }
 
 // UpdateContextData updates the risk context data
@@ -231,8 +214,3 @@ func (a *Analyzer) GetRiskTrend(sources []string, duration time.Duration) map[st
     
     return result
 }
-
-
-
-
-

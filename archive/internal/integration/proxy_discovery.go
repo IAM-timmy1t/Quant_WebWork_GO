@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/timot/Quant_WebWork_GO/internal/discovery"
-	"github.com/timot/Quant_WebWork_GO/internal/proxy"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/discovery"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/proxy"
 )
 
 // ProxyDiscoveryIntegrator manages the integration between service discovery and proxy
@@ -278,3 +278,4 @@ func (pdi *ProxyDiscoveryIntegrator) GetServiceMetrics() map[string]*ServiceMetr
 	}
 	return metrics
 }
+

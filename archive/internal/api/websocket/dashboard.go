@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/timot/Quant_WebWork_GO/internal/dashboard"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/dashboard"
 	"compress/flate"
 )
 
@@ -350,3 +350,4 @@ func (c *DashboardClient) readPump() {
 		}
 	}
 }
+

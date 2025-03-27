@@ -5,9 +5,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/timot/Quant_WebWork_GO/internal/monitoring"
-	"github.com/timot/Quant_WebWork_GO/internal/storage"
-	"github.com/timot/Quant_WebWork_GO/internal/tracing"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/monitoring"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/storage"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/tracing"
 )
 
 // Service manages dashboard state and operations
@@ -136,3 +136,4 @@ func (s *Service) broadcast(msg Message) {
 		}
 	}
 }
+

@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/timot/Quant_WebWork_GO/internal/monitoring"
-	"github.com/timot/Quant_WebWork_GO/internal/tracing"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/monitoring"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/tracing"
 	"go.etcd.io/bbolt"
 )
 
@@ -527,3 +527,4 @@ func (ms *MetricsStorage) aggregateMetrics(aggregationType string) error {
 		return nil
 	})
 }
+

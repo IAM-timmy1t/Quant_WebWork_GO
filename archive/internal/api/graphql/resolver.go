@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/graph-gophers/graphql-go"
-	"github.com/timot/Quant_WebWork_GO/internal/monitoring"
-	"github.com/timot/Quant_WebWork_GO/internal/auth"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/monitoring"
+	"github.com/IAM-timmy1t/Quant_WebWork_GO/internal/auth"
 )
 
 // Resolver is the root resolver for GraphQL queries
@@ -284,3 +284,4 @@ func (eb *EventBus) Publish(event string, data interface{}) {
 		}
 	}
 }
+
